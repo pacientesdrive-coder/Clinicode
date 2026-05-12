@@ -1,5 +1,6 @@
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 
 // ─── PALETA Y ESTILOS GLOBALES ─────────────────────────────────────────────
 const RISK_CONFIG = {
@@ -43,6 +44,27 @@ const INSTITUTIONS = [
 let ACTIVE_INSTITUTION_ID = "centro_medico";
 let ACTIVE_USER_ID = "admin";
 const getInstitution = (id) => INSTITUTIONS.find(i => i.id === id) || INSTITUTIONS[0];
+
+
+// ─── LOGIN REAL / MAPEO DE USUARIOS ───────────────────────────────────────
+// En Supabase Auth el login valida email/contraseña. Este mapa conecta ese email
+// con el perfil DEMO de la app para aplicar permisos por profesional/admin.
+// Luego, cuando pasemos a base de datos real, esto debe vivir en una tabla "profiles".
+const AUTH_PROFILE_BY_EMAIL = {
+  "admin@clincoord.demo": { appUserId: "admin", institution: "centro_medico", label: "Administrador/a general" },
+  "valentina@clincoord.demo": { appUserId: "p1", institution: "centro_medico", label: "Dra. Valentina Rojas" },
+  "andres@clincoord.demo": { appUserId: "p2", institution: "centro_medico", label: "Dr. Andrés Méndez" },
+  "camila@clincoord.demo": { appUserId: "p3", institution: "centro_medico", label: "Dra. Camila Fuentes" },
+  "roberto@clincoord.demo": { appUserId: "p4", institution: "centro_medico", label: "Ps. Roberto Sánchez" },
+  "h-admin@clincoord.demo": { appUserId: "admin", institution: "hospital", label: "Administrador/a Hospital" },
+  "h-valentina@clincoord.demo": { appUserId: "p1_h", institution: "hospital", label: "Dra. Valentina Rojas · Hospital" },
+  "h-andres@clincoord.demo": { appUserId: "p2_h", institution: "hospital", label: "Dr. Andrés Méndez · Hospital" },
+};
+
+const getAuthProfileFromEmail = (email) => {
+  const clean = (email || "").trim().toLowerCase();
+  return AUTH_PROFILE_BY_EMAIL[clean] || { appUserId: "admin", institution: "centro_medico", label: clean || "Usuario autenticado" };
+};
 
 // ─── DATOS MOCK ────────────────────────────────────────────────────────────
 const RAW_PROFESSIONALS = [
@@ -611,11 +633,11 @@ const Sidebar = ({ active, setActive }) => (
 );
 
 // ─── TOPBAR ────────────────────────────────────────────────────────────────
-const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser }) => (
+const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser, authLocked = false, authEmail, onLogout }) => (
   <header className="h-14 bg-[#0d1117]/80 backdrop-blur-sm border-b border-slate-800 flex items-center gap-3 px-6 sticky top-0 z-10">
     <h1 className="text-slate-100 font-semibold text-base flex-shrink-0">{title}</h1>
     <InstitutionSwitcher activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} />
-    <SessionSwitcher activeUser={activeUser} setActiveUser={setActiveUser} />
+    <SessionSwitcher activeUser={activeUser} setActiveUser={setActiveUser} locked={authLocked} authEmail={authEmail} onLogout={onLogout} />
     <div className="flex-1 max-w-sm ml-auto">
       <div className="relative">
         <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
@@ -682,9 +704,23 @@ const InstitutionSwitcher = ({ activeInstitution, setActiveInstitution, compact 
   </div>
 );
 
-const SessionSwitcher = ({ activeUser, setActiveUser, compact = false }) => {
+const SessionSwitcher = ({ activeUser, setActiveUser, compact = false, locked = false, authEmail, onLogout }) => {
   const current = getCurrentUser();
   const options = getUserOptions();
+  if (locked) {
+    return (
+      <div className={`flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 ${compact ? "w-full justify-between" : "flex-shrink-0"}`}>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Sesión</span>
+        <span className={`${compact ? "flex-1" : "max-w-[210px]"} truncate rounded-full border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-semibold text-slate-100`} title={authEmail || current.name}>
+          {current.id === "admin" ? "Administrador/a" : `${current.initials} · ${current.name}`}
+        </span>
+        <span className={`hidden rounded-full border px-2 py-0.5 text-[10px] font-bold md:inline-flex ${current.id === "admin" ? "border-emerald-700 bg-emerald-900/20 text-emerald-400" : "border-sky-700 bg-sky-900/20 text-sky-400"}`}>
+          {current.id === "admin" ? "Todo" : "Propios"}
+        </span>
+        {onLogout && <button onClick={onLogout} className="rounded-full border border-red-800 bg-red-900/20 px-2 py-1 text-[10px] font-bold text-red-300 hover:bg-red-900/40">Salir</button>}
+      </div>
+    );
+  }
   return (
     <div className={`flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 ${compact ? "w-full justify-between" : "flex-shrink-0"}`}>
       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Usuario</span>
@@ -744,7 +780,7 @@ const InstitutionSummary = ({ activeInstitution }) => {
   );
 };
 
-const MobileTopbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser }) => (
+const MobileTopbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser, authLocked = false, authEmail, onLogout }) => (
   <header className="sticky top-0 z-40 border-b border-slate-800 bg-[#0d1117]/95 px-4 pt-4 pb-3 shadow-lg shadow-black/30 backdrop-blur-xl">
     <div className="pr-28">
       <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-bold">ClinCoord · App móvil</div>
@@ -757,7 +793,7 @@ const MobileTopbar = ({ title, search, setSearch, activeInstitution, setActiveIn
     </div>
     <div className="mt-3 space-y-2">
       <InstitutionSwitcher activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} compact />
-      <SessionSwitcher activeUser={activeUser} setActiveUser={setActiveUser} compact />
+      <SessionSwitcher activeUser={activeUser} setActiveUser={setActiveUser} compact locked={authLocked} authEmail={authEmail} onLogout={onLogout} />
     </div>
     <div className="relative mt-3">
       <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
@@ -2019,17 +2055,133 @@ const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode,
   </div>
 );
 
+
+// ─── PUERTA DE LOGIN REAL / DEMO ─────────────────────────────────────────
+const AuthGate = ({ children }) => {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("login");
+  const [message, setMessage] = useState("");
+  const [demoUnlocked, setDemoUnlocked] = useState(!isSupabaseConfigured);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data?.session || null);
+      setLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setLoading(false);
+    });
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  const handleAuth = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      setMessage("Escribe email y contraseña.");
+      return;
+    }
+    const action = mode === "signup"
+      ? supabase.auth.signUp({ email: cleanEmail, password })
+      : supabase.auth.signInWithPassword({ email: cleanEmail, password });
+    const { error } = await action;
+    if (error) {
+      setMessage(error.message || "No se pudo iniciar sesión.");
+      return;
+    }
+    if (mode === "signup") {
+      setMessage("Usuario creado. Si Supabase pide confirmar correo, revisa el email antes de entrar.");
+    }
+  };
+
+  const handleLogout = async () => {
+    if (isSupabaseConfigured) await supabase.auth.signOut();
+    setSession(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#080d13] text-slate-100 flex items-center justify-center p-6">
+        <div className="rounded-2xl border border-slate-800 bg-[#131920] p-6 text-sm text-slate-300">Cargando sesión segura…</div>
+      </div>
+    );
+  }
+
+  if (!isSupabaseConfigured && !demoUnlocked) {
+    setDemoUnlocked(true);
+  }
+
+  if (!isSupabaseConfigured && demoUnlocked) {
+    return children({ authSession: null, authProfile: { appUserId: "admin", institution: "centro_medico", label: "Modo demo sin login real" }, onLogout: null, authLocked: false });
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-[#080d13] text-slate-100 flex items-center justify-center p-4" style={{ fontFamily:"'DM Sans', ui-sans-serif, system-ui, sans-serif" }}>
+        <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-[#131920] p-6 shadow-2xl shadow-black/50">
+          <div className="mb-6">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-600 text-lg font-black text-white">CC</div>
+            <div className="mt-4 text-2xl font-black text-white">ClinCoord Mental</div>
+            <div className="mt-1 text-sm text-slate-400">Etapa 4 · Login real con Supabase Auth</div>
+          </div>
+          <form onSubmit={handleAuth} className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">Email</label>
+              <input value={email} onChange={e => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="admin@clincoord.demo" className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none focus:border-sky-500" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">Contraseña</label>
+              <input value={password} onChange={e => setPassword(e.target.value)} type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} placeholder="mínimo 6 caracteres" className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none focus:border-sky-500" />
+            </div>
+            {message && <div className="rounded-xl border border-amber-800 bg-amber-900/20 p-3 text-xs text-amber-300">{message}</div>}
+            <button type="submit" className="w-full rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white hover:bg-sky-500">
+              {mode === "signup" ? "Crear usuario" : "Entrar"}
+            </button>
+          </form>
+          <button onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setMessage(""); }} className="mt-4 w-full rounded-2xl border border-slate-700 px-4 py-3 text-xs font-bold text-slate-300 hover:bg-slate-800">
+            {mode === "signup" ? "Ya tengo cuenta" : "Crear cuenta nueva"}
+          </button>
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 p-3 text-xs leading-relaxed text-slate-500">
+            Para aplicar permisos demo por usuario, crea usuarios en Supabase con emails del mapa, por ejemplo <span className="font-mono text-sky-400">admin@clincoord.demo</span> o <span className="font-mono text-sky-400">valentina@clincoord.demo</span>. En producción esto debe pasar a tabla de perfiles y políticas RLS.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const authProfile = getAuthProfileFromEmail(session.user?.email);
+  return children({ authSession: session, authProfile, onLogout: handleLogout, authLocked: true });
+};
+
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────
-export default function App() {
+function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }) {
   const [page, setPage]     = useState("dashboard");
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("desktop");
-  const [activeInstitution, setActiveInstitutionRaw] = useState("centro_medico");
-  const [activeUser, setActiveUser] = useState("admin");
+  const [activeInstitution, setActiveInstitutionRaw] = useState(authProfile?.institution || "centro_medico");
+  const [activeUser, setActiveUser] = useState(authProfile?.appUserId || "admin");
   const [themeMode, setThemeMode] = useState("dark");
+  useEffect(() => {
+    if (!authProfile) return;
+    setActiveInstitutionRaw(authProfile.institution || "centro_medico");
+    setActiveUser(authProfile.appUserId || "admin");
+    setSearch("");
+  }, [authProfile?.appUserId, authProfile?.institution]);
+
   const setActiveInstitution = (institutionId) => {
     setActiveInstitutionRaw(institutionId);
-    setActiveUser("admin");
+    setActiveUser(authLocked ? (authProfile?.appUserId || "admin") : "admin");
     setSearch("");
   };
   ACTIVE_INSTITUTION_ID = activeInstitution;
@@ -2146,7 +2298,7 @@ export default function App() {
 
       {isMobileView ? (
         <>
-          <MobileTopbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} />
+          <MobileTopbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} authLocked={authLocked} authEmail={authSession?.user?.email} onLogout={onLogout} />
           <main>
             {renderPage()}
           </main>
@@ -2156,7 +2308,7 @@ export default function App() {
         <>
           <Sidebar active={page} setActive={setPage} />
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-            <Topbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} />
+            <Topbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} authLocked={authLocked} authEmail={authSession?.user?.email} onLogout={onLogout} />
             <main className="flex-1 overflow-y-auto p-6">
               {renderPage()}
             </main>
@@ -2164,5 +2316,16 @@ export default function App() {
         </>
       )}
     </div>
+  );
+}
+
+
+export default function App() {
+  return (
+    <AuthGate>
+      {({ authSession, authProfile, onLogout, authLocked }) => (
+        <ClinCoordApp authSession={authSession} authProfile={authProfile} onLogout={onLogout} authLocked={authLocked} />
+      )}
+    </AuthGate>
   );
 }
