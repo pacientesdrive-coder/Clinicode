@@ -43,13 +43,19 @@ const INSTITUTIONS = [
 
 let ACTIVE_INSTITUTION_ID = "centro_medico";
 let ACTIVE_USER_ID = "admin";
+let USING_SUPABASE_DATA = false;
 const getInstitution = (id) => INSTITUTIONS.find(i => i.id === id) || INSTITUTIONS[0];
+const normalizeWorkspaceId = (institution) => {
+  const slug = (institution?.slug || institution?.kind || institution || "").toString().toLowerCase();
+  return slug.includes("hospital") ? "hospital" : "centro_medico";
+};
+const normalizeRoleForApp = (role) => role === "terapeuta_ocupacional" ? "terapeuta" : role;
 
 
 // ─── LOGIN REAL / MAPEO DE USUARIOS ───────────────────────────────────────
-// En Supabase Auth el login valida email/contraseña. Este mapa conecta ese email
-// con el perfil DEMO de la app para aplicar permisos por profesional/admin.
-// Luego, cuando pasemos a base de datos real, esto debe vivir en una tabla "profiles".
+// En modo demo sin base real, este mapa conecta email con perfil de app.
+// En Etapa 5 la app intenta leer la tabla public.profiles de Supabase
+// y usa este mapa solo como respaldo temporal mientras carga.
 const AUTH_PROFILE_BY_EMAIL = {
   "admin@clincoord.demo": { appUserId: "admin", institution: "centro_medico", label: "Administrador/a general" },
   "valentina@clincoord.demo": { appUserId: "p1", institution: "centro_medico", label: "Dra. Valentina Rojas" },
@@ -424,7 +430,7 @@ const TRACE_EVENTS = createScopedCollection(RAW_TRACE_EVENTS, canAccessPatientLi
 const MESSAGES = createScopedCollection(RAW_MESSAGES, canAccessPatientLinkedItem);
 const FILES = createScopedCollection(RAW_FILES, canAccessPatientLinkedItem);
 
-const DEMO_TODAY = "2024-10-01";
+const DEMO_TODAY = new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, days) => {
   const d = new Date(`${dateStr}T00:00:00`);
   d.setDate(d.getDate() + days);
@@ -449,6 +455,317 @@ const DEPOT_TRACKING = {
   "PAC-011": { lastAdministration:"2024-09-06", nextAdministration:"2024-10-04", periodicity:"Cada 28 días", site:"Deltoides", responsible:"h7", note:"Paliperidona LAI; seguimiento hospitalario." },
 };
 
+
+const replaceCollection = (target, rows) => {
+  target.splice(0, target.length, ...(rows || []));
+};
+
+const resetTrackingObject = (obj) => {
+  Object.keys(obj).forEach(key => delete obj[key]);
+};
+
+const mapInstitutionFromDb = (institutionId, institutionById) => {
+  const inst = institutionById.get(institutionId);
+  return normalizeWorkspaceId(inst);
+};
+
+const loadWorkspaceDataFromSupabase = async (session) => {
+  if (!isSupabaseConfigured || !session?.user?.id) {
+    return { authProfile: getAuthProfileFromEmail(session?.user?.email) };
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("id,email,full_name,role,institution_id,professional_id,institutions(id,slug,name,kind)")
+    .eq("id", session.user.id)
+    .single();
+
+  if (profileError) throw profileError;
+  if (!profile) throw new Error("No existe perfil en public.profiles para este usuario. Ejecuta la etapa 5.3 o crea el perfil correspondiente.");
+
+  const [
+    institutionsRes,
+    professionalsRes,
+    patientsRes,
+    patientTeamRes,
+    medicationsRes,
+    clozapineRes,
+    laiRes,
+    alertsRes,
+    traceRes,
+    messagesRes,
+    filesRes,
+  ] = await Promise.all([
+    supabase.from("institutions").select("*"),
+    supabase.from("professionals").select("*").order("full_name"),
+    supabase.from("patients").select("*").order("clinical_code"),
+    supabase.from("patient_team").select("*"),
+    supabase.from("medications").select("*").order("created_at", { ascending: true }),
+    supabase.from("clozapine_programs").select("*"),
+    supabase.from("lai_programs").select("*"),
+    supabase.from("alerts").select("*").order("due_date", { ascending: true }),
+    supabase.from("trace_events").select("*").order("created_at", { ascending: false }),
+    supabase.from("messages").select("*").order("created_at", { ascending: false }),
+    supabase.from("files").select("*").order("created_at", { ascending: false }),
+  ]);
+
+  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes];
+  const firstError = responses.find(r => r.error)?.error;
+  if (firstError) throw firstError;
+
+  const institutions = institutionsRes.data || [];
+  const professionalsDb = professionalsRes.data || [];
+  const patientsDb = patientsRes.data || [];
+  const patientTeamDb = patientTeamRes.data || [];
+  const medicationsDb = medicationsRes.data || [];
+  const clozapineDb = clozapineRes.data || [];
+  const laiDb = laiRes.data || [];
+  const alertsDb = alertsRes.data || [];
+  const traceDb = traceRes.data || [];
+  const messagesDb = messagesRes.data || [];
+  const filesDb = filesRes.data || [];
+
+  const institutionById = new Map(institutions.map(i => [i.id, i]));
+  if (profile.institutions && !institutionById.has(profile.institution_id)) {
+    institutionById.set(profile.institution_id, profile.institutions);
+  }
+
+  const professionalRows = professionalsDb.map(pr => ({
+    id: pr.id,
+    name: pr.full_name,
+    role: normalizeRoleForApp(pr.role),
+    specialty: pr.specialty || "",
+    patients: 0,
+    initials: pr.initials || (pr.full_name || "?").split(/\s+/).slice(0, 2).map(x => x[0]).join("").toUpperCase(),
+    color: pr.avatar_color || "bg-slate-600",
+    institution: mapInstitutionFromDb(pr.institution_id, institutionById),
+    email: pr.email,
+    _dbId: pr.id,
+  }));
+
+  const patientCodeByUuid = new Map();
+  const patientByUuid = new Map();
+  const patientRows = patientsDb.map(p => {
+    const row = {
+      id: p.clinical_code,
+      _dbId: p.id,
+      institution: mapInstitutionFromDb(p.institution_id, institutionById),
+      initials: p.initials,
+      age: p.age,
+      gender: p.gender || "NR",
+      dx_main: p.dx_main || "Sin diagnóstico principal registrado",
+      dx_secondary: Array.isArray(p.dx_secondary) ? p.dx_secondary : [],
+      risk: p.risk || "no_evaluado",
+      status: p.status || "activo",
+      suicide_risk: p.suicide_risk || "no_evaluado",
+      hetero_risk: p.hetero_risk || "no_evaluado",
+      social_risk: p.social_risk || "no_evaluado",
+      substances: p.substances || "—",
+      adherence: p.adherence || "—",
+      functional: p.functional_status || "—",
+      support: p.support_network || "—",
+      doctor: null,
+      psychologist: null,
+      ot: null,
+      nurse: null,
+      social: null,
+      admission: p.admission_date,
+      last_contact: p.last_contact_date,
+      next_control: p.next_control_date,
+      meds: [],
+      alerts: 0,
+      tasks: 0,
+      notes: p.notes || "",
+    };
+    patientCodeByUuid.set(p.id, p.clinical_code);
+    patientByUuid.set(p.id, row);
+    return row;
+  });
+
+  const roleToPatientField = (teamRole) => {
+    if (["medico", "psiquiatra"].includes(teamRole)) return "doctor";
+    if (teamRole === "psicologo") return "psychologist";
+    if (teamRole === "terapeuta_ocupacional") return "ot";
+    if (teamRole === "enfermero") return "nurse";
+    if (teamRole === "trabajador_social") return "social";
+    return null;
+  };
+
+  patientTeamDb.forEach(team => {
+    const patient = patientByUuid.get(team.patient_id);
+    const field = roleToPatientField(team.team_role);
+    if (patient && field && (!patient[field] || team.is_primary)) patient[field] = team.professional_id;
+  });
+
+  const medicationRows = [];
+  medicationsDb.forEach(m => {
+    const code = patientCodeByUuid.get(m.patient_id);
+    const patient = patientByUuid.get(m.patient_id);
+    if (!code || !patient) return;
+    medicationRows.push({
+      id: m.id,
+      _dbId: m.id,
+      institution: mapInstitutionFromDb(m.institution_id, institutionById),
+      drug: m.drug,
+      dose: m.dose || "",
+      scheme: m.scheme || "",
+      freq: m.frequency || "",
+      startDate: m.start_date,
+      lastAdj: m.last_adjustment_date,
+      prescriber: m.prescriber_professional_id,
+      nextControl: m.next_control_date,
+      followup: m.followup || "",
+      program: m.program || "general",
+    });
+    if (!patient.meds.includes(m.id)) patient.meds.push(m.id);
+  });
+
+  resetTrackingObject(CLOZAPINE_TRACKING);
+  clozapineDb.forEach(c => {
+    const code = patientCodeByUuid.get(c.patient_id);
+    if (!code) return;
+    CLOZAPINE_TRACKING[code] = {
+      _dbId: c.id,
+      medicationDbId: c.medication_id || null,
+      lastHemogram: c.last_cbc_date,
+      nextHemogram: c.next_cbc_date,
+      periodicity: `Cada ${c.cbc_frequency_days || 30} días`,
+      periodDays: c.cbc_frequency_days || 30,
+      anc: c.neutrophils ?? "—",
+      wbc: c.leukocytes ?? "—",
+      statusValue: c.status || "vigente",
+      responsible: c.responsible_professional_id || null,
+      startDate: c.start_date || null,
+      note: c.notes || "",
+    };
+  });
+
+  resetTrackingObject(DEPOT_TRACKING);
+  laiDb.forEach(lai => {
+    const code = patientCodeByUuid.get(lai.patient_id);
+    const patient = patientByUuid.get(lai.patient_id);
+    if (!code || !patient) return;
+    const fakeMedicationId = lai.medication_id || `lai_${lai.id}`;
+    if (!medicationRows.some(m => m.id === fakeMedicationId)) {
+      medicationRows.push({
+        id: fakeMedicationId,
+        _dbId: lai.medication_id || null,
+        institution: mapInstitutionFromDb(lai.institution_id, institutionById),
+        drug: lai.drug,
+        dose: lai.dose || "",
+        scheme: `${lai.route || "IM"}/${lai.interval_days || "?"}d`,
+        freq: `Cada ${lai.interval_days || "?"} días`,
+        startDate: null,
+        lastAdj: lai.last_administration_date,
+        prescriber: lai.responsible_professional_id,
+        nextControl: lai.next_administration_date,
+        followup: lai.notes || "Seguimiento inyectable de depósito",
+        program: "lai",
+      });
+    }
+    if (!patient.meds.includes(fakeMedicationId)) patient.meds.push(fakeMedicationId);
+    DEPOT_TRACKING[code] = {
+      _dbId: lai.id,
+      medicationDbId: lai.medication_id || null,
+      lastAdministration: lai.last_administration_date,
+      nextAdministration: lai.next_administration_date,
+      periodicity: `Cada ${lai.interval_days || "?"} días`,
+      intervalDays: lai.interval_days || "",
+      route: lai.route || "IM",
+      site: lai.administration_site || "—",
+      statusValue: lai.status || "vigente",
+      responsible: lai.responsible_professional_id,
+      note: lai.notes || "",
+    };
+  });
+
+  const alertRows = alertsDb.map(a => ({
+    id: a.id,
+    institution: mapInstitutionFromDb(a.institution_id, institutionById),
+    title: a.title,
+    patient: patientCodeByUuid.get(a.patient_id) || null,
+    responsible: a.responsible_professional_id,
+    due: a.due_date,
+    status: a.status,
+    priority: a.priority,
+    type: a.type,
+    comment: a.comment || "",
+  }));
+
+  const alertsByPatient = alertRows.reduce((acc, a) => {
+    if (!a.patient) return acc;
+    if (!acc[a.patient]) acc[a.patient] = { alerts: 0, tasks: 0 };
+    if (a.status !== "resuelto" && a.status !== "cancelado") acc[a.patient].alerts += 1;
+    if (["tarea", "control", "reunion"].includes(a.type) && a.status !== "resuelto" && a.status !== "cancelado") acc[a.patient].tasks += 1;
+    return acc;
+  }, {});
+  patientRows.forEach(p => {
+    p.alerts = alertsByPatient[p.id]?.alerts || 0;
+    p.tasks = alertsByPatient[p.id]?.tasks || 0;
+  });
+
+  const traceRows = traceDb.map(ev => ({
+    id: ev.id,
+    institution: mapInstitutionFromDb(ev.institution_id, institutionById),
+    ts: (ev.created_at || "").replace("T", " ").slice(0, 16),
+    user: ev.actor_professional_id,
+    action: ev.action,
+    patient: patientCodeByUuid.get(ev.patient_id) || null,
+    field: ev.field || "-",
+    prev: ev.previous_value || "-",
+    next: ev.next_value || "-",
+    type: ev.event_type || "edicion",
+  }));
+
+  const messageRows = messagesDb.map(msg => ({
+    id: msg.id,
+    institution: mapInstitutionFromDb(msg.institution_id, institutionById),
+    from: msg.from_professional_id,
+    to: msg.to_professional_id,
+    patient: patientCodeByUuid.get(msg.patient_id) || null,
+    ts: (msg.created_at || "").replace("T", " ").slice(0, 16),
+    text: msg.body,
+    important: Boolean(msg.important),
+    read: Boolean(msg.read_at),
+  }));
+
+  const fileRows = filesDb.map(file => ({
+    id: file.id,
+    institution: mapInstitutionFromDb(file.institution_id, institutionById),
+    name: file.file_name,
+    size: file.file_size_bytes ? `${Math.round(file.file_size_bytes / 1024)} KB` : "—",
+    date: (file.created_at || "").slice(0, 10),
+    author: file.uploaded_by,
+    patient: patientCodeByUuid.get(file.patient_id) || null,
+    type: file.file_type || "archivo",
+  }));
+
+  replaceCollection(RAW_PROFESSIONALS, professionalRows);
+  replaceCollection(RAW_PATIENTS, patientRows);
+  replaceCollection(RAW_MEDICATIONS, medicationRows);
+  replaceCollection(RAW_ALERTS, alertRows);
+  replaceCollection(RAW_TRACE_EVENTS, traceRows);
+  replaceCollection(RAW_MESSAGES, messageRows);
+  replaceCollection(RAW_FILES, fileRows);
+  USING_SUPABASE_DATA = true;
+
+  const workspaceId = normalizeWorkspaceId(profile.institutions || institutionById.get(profile.institution_id));
+  return {
+    authProfile: {
+      appUserId: profile.role === "admin" ? "admin" : profile.professional_id,
+      institution: workspaceId,
+      label: profile.full_name || profile.email,
+      role: profile.role,
+      email: profile.email,
+    },
+    counts: {
+      patients: patientRows.length,
+      professionals: professionalRows.length,
+      alerts: alertRows.length,
+    },
+  };
+};
+
 const getClozapineRows = () => PATIENTS.flatMap(patient => {
   const meds = patient.meds.map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean);
   return meds.filter(med => med.drug.toLowerCase().includes("clozapina")).map(med => {
@@ -458,19 +775,26 @@ const getClozapineRows = () => PATIENTS.flatMap(patient => {
     const nextHemogram = t.nextHemogram || addDays(lastHemogram, periodDays);
     return {
       paciente: patient.id,
+      patientDbId: patient._dbId || null,
+      programDbId: t._dbId || null,
+      medicationDbId: t.medicationDbId || med._dbId || med.id || null,
       iniciales: patient.initials,
       riesgo: patient.risk,
       estado: patient.status,
       farmaco: med.drug,
       dosis: med.dose,
       esquema: med.scheme,
+      startDate: t.startDate || med.startDate || "",
       periodicidadHemograma: t.periodicity || "Mensual",
+      periodDays: t.periodDays || 30,
       ultimoHemograma: lastHemogram,
       proximoHemograma: nextHemogram,
       dias: daysUntil(nextHemogram),
       neutrofilos: t.anc || "—",
       leucocitos: t.wbc || "—",
-      responsable: getProf(med.prescriber)?.name || med.prescriber,
+      responsibleId: t.responsible || med.prescriber || "",
+      responsable: getProf(t.responsible || med.prescriber)?.name || t.responsible || med.prescriber,
+      statusValue: t.statusValue || "vigente",
       nota: t.note || med.followup,
       status: dueStatus(nextHemogram),
     };
@@ -485,17 +809,24 @@ const getDepotRows = () => PATIENTS.flatMap(patient => {
     const nextAdministration = t.nextAdministration || med.nextControl;
     return {
       paciente: patient.id,
+      patientDbId: patient._dbId || null,
+      programDbId: t._dbId || null,
+      medicationDbId: t.medicationDbId || med._dbId || null,
       iniciales: patient.initials,
       riesgo: patient.risk,
       estado: patient.status,
       farmaco: med.drug,
       dosis: med.dose,
       esquema: med.scheme,
+      intervalDays: t.intervalDays || String(med.freq || "").match(/(\d+)/)?.[1] || "28",
+      route: t.route || "IM",
       periodicidad: t.periodicity || med.freq,
       ultimaAdministracion: lastAdministration,
       proximaAdministracion: nextAdministration,
       dias: daysUntil(nextAdministration),
       sitio: t.site || "—",
+      statusValue: t.statusValue || "vigente",
+      responsibleId: t.responsible || med.prescriber || "",
       responsable: getProf(t.responsible || med.prescriber)?.name || t.responsible || med.prescriber,
       nota: t.note || med.followup,
       status: dueStatus(nextAdministration),
@@ -831,6 +1162,800 @@ const MobileBottomNav = ({ active, setActive }) => (
   </nav>
 );
 
+
+// ─── FORMULARIOS REALES SUPABASE: PACIENTES Y EQUIPO ──────────────────────
+const workspaceToInstitutionSlug = (workspaceId) => workspaceId === "hospital" ? "hospital" : "centro-medico";
+const emptyToNull = (value) => {
+  const v = String(value ?? "").trim();
+  return v ? v : null;
+};
+const parseOptionalInt = (value) => {
+  const v = String(value ?? "").trim();
+  if (!v) return null;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
+};
+const parseOptionalNumber = (value) => {
+  const v = String(value ?? "").trim().replace(",", ".");
+  if (!v) return null;
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+};
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const calculateNextDate = (date, days) => {
+  const d = emptyToNull(date);
+  const n = parseOptionalInt(days);
+  if (!d || !n) return "";
+  return addDays(d, n);
+};
+const CLINICAL_PROGRAM_STATUS_OPTIONS = ["vigente", "proximo", "atrasado", "suspendido"];
+const inferProgramStatus = (nextDate) => {
+  const d = daysUntil(nextDate);
+  if (d < 0) return "atrasado";
+  if (d <= 7) return "proximo";
+  return "vigente";
+};
+const splitSecondaryDx = (value) => String(value ?? "")
+  .split(/[;\n]/)
+  .map(v => v.trim())
+  .filter(Boolean);
+
+const TEAM_FIELD_CONFIG = [
+  { field:"doctor",       label:"Psiquiatra / Médico",  teamRole:"psiquiatra",              allowed:["psiquiatra_jefe","psiquiatra","medico_general"] },
+  { field:"psychologist", label:"Psicólogo/a",          teamRole:"psicologo",               allowed:["psicologo"] },
+  { field:"ot",           label:"Terapia ocupacional",  teamRole:"terapeuta_ocupacional",   allowed:["terapeuta","terapeuta_ocupacional"] },
+  { field:"nurse",        label:"Enfermería",           teamRole:"enfermero",               allowed:["enfermero"] },
+  { field:"social",       label:"Trabajo social",       teamRole:"trabajador_social",       allowed:["trabajador_social"] },
+];
+
+const getTeamOptionsForField = (field) => {
+  const cfg = TEAM_FIELD_CONFIG.find(x => x.field === field);
+  const allowed = cfg?.allowed || [];
+  return RAW_PROFESSIONALS
+    .filter(p => p.institution === ACTIVE_INSTITUTION_ID && p.is_active !== false && allowed.includes(p.role))
+    .sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const getInstitutionIdForWorkspace = async (workspaceId) => {
+  const { data, error } = await supabase
+    .from("institutions")
+    .select("id")
+    .eq("slug", workspaceToInstitutionSlug(workspaceId))
+    .single();
+  if (error) throw error;
+  if (!data?.id) throw new Error("No se encontró la institución activa en Supabase.");
+  return data.id;
+};
+
+const getCurrentDbProfile = async (authSession) => {
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,email,full_name,role,institution_id,professional_id,is_active,institutions(id,slug,kind,name)")
+    .eq("id", authSession.user.id)
+    .single();
+  if (error) throw error;
+  if (!data?.id) throw new Error("Tu usuario no tiene perfil en Supabase. Revisa la etapa 5.3.");
+  if (data.is_active === false) throw new Error("Tu perfil está desactivado.");
+  return data;
+};
+
+const insertTraceEvent = async ({ institutionId, patientId, authSession, action, field, previousValue, nextValue, eventType = "edicion" }) => {
+  if (!isSupabaseConfigured || !authSession?.user?.id || !institutionId || !patientId) return;
+  await supabase.from("trace_events").insert({
+    institution_id: institutionId,
+    patient_id: patientId,
+    actor_profile_id: authSession.user.id,
+    action,
+    field,
+    previous_value: previousValue ?? null,
+    next_value: nextValue ?? null,
+    event_type: eventType,
+  });
+};
+
+const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy = false) => {
+  const payload = {
+    institution_id: institutionId,
+    clinical_code: String(form.clinical_code || "").trim().toUpperCase(),
+    initials: String(form.initials || "").trim().toUpperCase(),
+    age: parseOptionalInt(form.age),
+    gender: form.gender || "NR",
+    dx_main: emptyToNull(form.dx_main),
+    dx_secondary: splitSecondaryDx(form.dx_secondary),
+    risk: form.risk || "no_evaluado",
+    status: form.status || "activo",
+    suicide_risk: form.suicide_risk || "no_evaluado",
+    hetero_risk: form.hetero_risk || "no_evaluado",
+    social_risk: form.social_risk || "no_evaluado",
+    substances: emptyToNull(form.substances),
+    adherence: emptyToNull(form.adherence),
+    functional_status: emptyToNull(form.functional_status),
+    support_network: emptyToNull(form.support_network),
+    admission_date: emptyToNull(form.admission_date),
+    last_contact_date: emptyToNull(form.last_contact_date),
+    next_control_date: emptyToNull(form.next_control_date),
+    notes: emptyToNull(form.notes),
+  };
+  if (includeCreatedBy) payload.created_by = authSession?.user?.id || null;
+  return payload;
+};
+
+const buildTeamRows = (patientId, team) => TEAM_FIELD_CONFIG
+  .map(cfg => ({ cfg, professionalId: team[cfg.field] }))
+  .filter(item => Boolean(item.professionalId))
+  .map(item => ({
+    patient_id: patientId,
+    professional_id: item.professionalId,
+    team_role: item.cfg.teamRole,
+    is_primary: item.cfg.field === "doctor",
+  }));
+
+const buildTeamRowsForRpc = (team) => TEAM_FIELD_CONFIG
+  .map(cfg => ({ cfg, professionalId: team[cfg.field] }))
+  .filter(item => Boolean(item.professionalId))
+  .map(item => ({
+    professional_id: item.professionalId,
+    team_role: item.cfg.teamRole,
+    is_primary: item.cfg.field === "doctor",
+  }));
+
+const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitution, authSession, authProfile }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+
+  // v1.4.2: la institución y el rol se toman desde public.profiles,
+  // no desde el selector visual. Esto evita errores RLS cuando el usuario
+  // autenticado pertenece a Centro Médico pero la UI quedó en Hospital, o viceversa.
+  const dbProfile = await getCurrentDbProfile(authSession);
+  const isAdmin = dbProfile.role === "admin";
+  const institutionId = dbProfile.institution_id;
+
+  if (activeInstitution && normalizeWorkspaceId(dbProfile.institutions) !== activeInstitution) {
+    console.warn("La institución visual no coincide con el perfil. Se usará la institución del perfil Supabase.");
+  }
+
+  const payload = buildPatientPayload(form, institutionId, authSession, mode === "create");
+  if (!payload.clinical_code) throw new Error("El código clínico es obligatorio.");
+  if (!payload.initials) throw new Error("Las iniciales son obligatorias.");
+
+  if (mode === "create") {
+    if (!isAdmin) throw new Error("Solo un administrador de la institución puede crear pacientes nuevos. Entra con admin@clincoord.demo o h-admin@clincoord.demo.");
+
+    // v1.4.2: la creación se hace por RPC SECURITY DEFINER.
+    // Supabase valida el usuario con auth.uid(), toma la institución desde public.profiles
+    // y crea paciente + equipo en una sola operación. Esto evita falsos errores RLS
+    // cuando el frontend envía institution_id o created_by de forma distinta a la política.
+    const { data, error } = await supabase.rpc("clincoord_create_patient", {
+      p_patient: payload,
+      p_team: buildTeamRowsForRpc(team),
+    });
+    if (error) throw error;
+
+    const created = Array.isArray(data) ? data[0] : data;
+    if (!created?.id) throw new Error("El paciente fue creado, pero Supabase no devolvió su identificador.");
+    return created;
+  }
+
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const { error } = await supabase
+    .from("patients")
+    .update(payload)
+    .eq("id", patient._dbId);
+  if (error) throw error;
+
+  if (isAdmin) {
+    const { error: deleteTeamError } = await supabase
+      .from("patient_team")
+      .delete()
+      .eq("patient_id", patient._dbId);
+    if (deleteTeamError) throw deleteTeamError;
+    const teamRows = buildTeamRows(patient._dbId, team);
+    if (teamRows.length) {
+      const { error: teamError } = await supabase.from("patient_team").insert(teamRows);
+      if (teamError) throw teamError;
+    }
+  }
+
+  await insertTraceEvent({
+    institutionId,
+    patientId: patient._dbId,
+    authSession,
+    action: "Paciente actualizado desde app",
+    field: "resumen",
+    previousValue: patient.id,
+    nextValue: payload.clinical_code,
+    eventType: "edicion",
+  });
+  return { id: patient._dbId, clinical_code: payload.clinical_code };
+};
+
+const defaultPatientForm = () => ({
+  clinical_code:"",
+  initials:"",
+  age:"",
+  gender:"NR",
+  dx_main:"",
+  dx_secondary:"",
+  risk:"no_evaluado",
+  status:"activo",
+  suicide_risk:"no_evaluado",
+  hetero_risk:"no_evaluado",
+  social_risk:"no_evaluado",
+  substances:"",
+  adherence:"",
+  functional_status:"",
+  support_network:"",
+  admission_date:new Date().toISOString().slice(0, 10),
+  last_contact_date:new Date().toISOString().slice(0, 10),
+  next_control_date:"",
+  notes:"",
+});
+
+const patientToForm = (patient) => ({
+  clinical_code: patient?.id || "",
+  initials: patient?.initials || "",
+  age: patient?.age ?? "",
+  gender: patient?.gender || "NR",
+  dx_main: patient?.dx_main || "",
+  dx_secondary: Array.isArray(patient?.dx_secondary) ? patient.dx_secondary.join("; ") : "",
+  risk: patient?.risk || "no_evaluado",
+  status: patient?.status || "activo",
+  suicide_risk: patient?.suicide_risk || "no_evaluado",
+  hetero_risk: patient?.hetero_risk || "no_evaluado",
+  social_risk: patient?.social_risk || "no_evaluado",
+  substances: patient?.substances === "—" ? "" : patient?.substances || "",
+  adherence: patient?.adherence === "—" ? "" : patient?.adherence || "",
+  functional_status: patient?.functional === "—" ? "" : patient?.functional || "",
+  support_network: patient?.support === "—" ? "" : patient?.support || "",
+  admission_date: patient?.admission || "",
+  last_contact_date: patient?.last_contact || "",
+  next_control_date: patient?.next_control || "",
+  notes: patient?.notes || "",
+});
+
+const patientToTeam = (patient) => ({
+  doctor: patient?.doctor || "",
+  psychologist: patient?.psychologist || "",
+  ot: patient?.ot || "",
+  nurse: patient?.nurse || "",
+  social: patient?.social || "",
+});
+
+const FieldLabel = ({ children }) => <label className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">{children}</label>;
+const TextInput = ({ value, onChange, type="text", placeholder="", required=false }) => (
+  <input
+    type={type}
+    value={value ?? ""}
+    required={required}
+    placeholder={placeholder}
+    onChange={e => onChange(e.target.value)}
+    className="w-full rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+  />
+);
+const SelectInput = ({ value, onChange, children, disabled=false }) => (
+  <select
+    value={value ?? ""}
+    disabled={disabled}
+    onChange={e => onChange(e.target.value)}
+    className="w-full rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
+  >
+    {children}
+  </select>
+);
+const TextAreaInput = ({ value, onChange, rows=3, placeholder="" }) => (
+  <textarea
+    value={value ?? ""}
+    rows={rows}
+    placeholder={placeholder}
+    onChange={e => onChange(e.target.value)}
+    className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
+  />
+);
+
+const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInstitution, onClose, onSaved }) => {
+  const [form, setForm] = useState(() => mode === "edit" ? patientToForm(patient) : defaultPatientForm());
+  const [team, setTeam] = useState(() => mode === "edit" ? patientToTeam(patient) : patientToTeam(null));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const isAdmin = authProfile?.role === "admin" || ACTIVE_USER_ID === "admin";
+  const canManageTeam = isAdmin;
+  const canCreate = mode !== "create" || isAdmin;
+  const updateForm = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
+  const updateTeam = (key, value) => setTeam(prev => ({ ...prev, [key]: value }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await savePatientToSupabase({ mode, patient, form, team, activeInstitution, authSession, authProfile });
+      await onSaved?.();
+      onClose();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo guardar el paciente.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm" onClick={onClose}>
+      <form onSubmit={submit} className="my-4 w-full max-w-4xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/50" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-800 bg-[#131920]/95 p-5 backdrop-blur">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">Etapa 6.1 · Pacientes reales</div>
+            <h2 className="mt-1 text-xl font-black text-white">{mode === "create" ? "Nuevo paciente" : `Editar ${patient?.id}`}</h2>
+            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. El equipo tratante controla qué profesionales podrán ver el caso.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-bold text-slate-300 hover:bg-slate-800">✕</button>
+        </div>
+
+        <div className="space-y-5 p-5">
+          {!canCreate && (
+            <div className="rounded-2xl border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-200">
+              En esta versión, por seguridad, solo el administrador puede crear pacientes nuevos. Los profesionales pueden editar casos que ya tienen asignados.
+            </div>
+          )}
+          {error && <div className="rounded-2xl border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 text-sm font-black text-slate-100">Datos básicos</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div><FieldLabel>Código clínico</FieldLabel><TextInput required value={form.clinical_code} onChange={v => updateForm("clinical_code", v)} placeholder="CMP-005" /></div>
+              <div><FieldLabel>Iniciales</FieldLabel><TextInput required value={form.initials} onChange={v => updateForm("initials", v)} placeholder="A.B.C." /></div>
+              <div><FieldLabel>Edad</FieldLabel><TextInput type="number" value={form.age} onChange={v => updateForm("age", v)} /></div>
+              <div><FieldLabel>Género</FieldLabel><SelectInput value={form.gender} onChange={v => updateForm("gender", v)}><option value="NR">No registrado</option><option value="F">F</option><option value="M">M</option><option value="X">X</option></SelectInput></div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div><FieldLabel>Diagnóstico principal</FieldLabel><TextAreaInput rows={2} value={form.dx_main} onChange={v => updateForm("dx_main", v)} placeholder="Diagnóstico de trabajo" /></div>
+              <div><FieldLabel>Diagnósticos secundarios</FieldLabel><TextAreaInput rows={2} value={form.dx_secondary} onChange={v => updateForm("dx_secondary", v)} placeholder="Separar con punto y coma" /></div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 text-sm font-black text-slate-100">Riesgo, estado y seguimiento</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div><FieldLabel>Riesgo global</FieldLabel><SelectInput value={form.risk} onChange={v => updateForm("risk", v)}>{["critico","alto","medio","bajo","no_evaluado"].map(x => <option key={x} value={x}>{getRiskCfg(x).label}</option>)}</SelectInput></div>
+              <div><FieldLabel>Estado</FieldLabel><SelectInput value={form.status} onChange={v => updateForm("status", v)}>{Object.entries(STATUS_CONFIG).map(([k,c]) => <option key={k} value={k}>{c.label}</option>)}</SelectInput></div>
+              <div><FieldLabel>Riesgo suicida</FieldLabel><SelectInput value={form.suicide_risk} onChange={v => updateForm("suicide_risk", v)}>{["critico","alto","medio","bajo","no_evaluado"].map(x => <option key={x} value={x}>{getRiskCfg(x).label}</option>)}</SelectInput></div>
+              <div><FieldLabel>Riesgo social</FieldLabel><SelectInput value={form.social_risk} onChange={v => updateForm("social_risk", v)}>{["critico","alto","medio","bajo","no_evaluado"].map(x => <option key={x} value={x}>{getRiskCfg(x).label}</option>)}</SelectInput></div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div><FieldLabel>Riesgo heteroagresivo</FieldLabel><SelectInput value={form.hetero_risk} onChange={v => updateForm("hetero_risk", v)}>{["critico","alto","medio","bajo","no_evaluado"].map(x => <option key={x} value={x}>{getRiskCfg(x).label}</option>)}</SelectInput></div>
+              <div><FieldLabel>Ingreso</FieldLabel><TextInput type="date" value={form.admission_date} onChange={v => updateForm("admission_date", v)} /></div>
+              <div><FieldLabel>Último contacto</FieldLabel><TextInput type="date" value={form.last_contact_date} onChange={v => updateForm("last_contact_date", v)} /></div>
+              <div><FieldLabel>Próximo control</FieldLabel><TextInput type="date" value={form.next_control_date} onChange={v => updateForm("next_control_date", v)} /></div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 text-sm font-black text-slate-100">Contexto clínico-funcional</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div><FieldLabel>Sustancias</FieldLabel><TextInput value={form.substances} onChange={v => updateForm("substances", v)} /></div>
+              <div><FieldLabel>Adherencia</FieldLabel><TextInput value={form.adherence} onChange={v => updateForm("adherence", v)} /></div>
+              <div><FieldLabel>Estado funcional</FieldLabel><TextInput value={form.functional_status} onChange={v => updateForm("functional_status", v)} /></div>
+              <div><FieldLabel>Red de apoyo</FieldLabel><TextInput value={form.support_network} onChange={v => updateForm("support_network", v)} /></div>
+            </div>
+            <div className="mt-3"><FieldLabel>Observaciones de gestión</FieldLabel><TextAreaInput rows={4} value={form.notes} onChange={v => updateForm("notes", v)} /></div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <div className="text-sm font-black text-slate-100">Equipo tratante</div>
+              {!canManageTeam && <span className="rounded-full border border-amber-700 bg-amber-950/30 px-2 py-1 text-[10px] font-bold text-amber-300">Solo admin puede reasignar equipo</span>}
+            </div>
+            <p className="mb-3 text-xs text-slate-500">El paciente será visible para los profesionales asignados aquí.</p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {TEAM_FIELD_CONFIG.map(cfg => (
+                <div key={cfg.field}>
+                  <FieldLabel>{cfg.label}</FieldLabel>
+                  <SelectInput disabled={!canManageTeam} value={team[cfg.field]} onChange={v => updateTeam(cfg.field, v)}>
+                    <option value="">Sin asignar</option>
+                    {getTeamOptionsForField(cfg.field).map(prof => <option key={prof.id} value={prof.id}>{prof.name} · {ROLE_LABELS[prof.role] || prof.role}</option>)}
+                  </SelectInput>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 rounded-b-3xl border-t border-slate-800 bg-[#0d1117]/95 p-4 backdrop-blur">
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+          <button type="submit" disabled={saving || !canCreate} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
+            {saving ? "Guardando…" : mode === "create" ? "Crear paciente" : "Guardar cambios"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+// ─── FORMULARIOS REALES SUPABASE: CLOZAPINA E INYECTABLES ────────────────
+const getResponsibleOptions = () => RAW_PROFESSIONALS
+  .filter(p => p.institution === ACTIVE_INSTITUTION_ID && p.is_active !== false && p.role !== "admin")
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+const getVisiblePatientOptions = () => PATIENTS
+  .filter(p => p.institution === ACTIVE_INSTITUTION_ID && p._dbId)
+  .sort((a, b) => a.id.localeCompare(b.id));
+
+const clozapineDefaultForm = (row = null) => ({
+  patient_id: row?.patientDbId || "",
+  program_id: row?.programDbId || "",
+  medication_id: row?.medicationDbId || "",
+  dose: row?.dosis || "",
+  scheme: row?.esquema || "0-0-1",
+  start_date: row?.startDate || todayIso(),
+  cbc_frequency_days: row?.periodDays || 30,
+  last_cbc_date: row?.ultimoHemograma || todayIso(),
+  next_cbc_date: row?.proximoHemograma || calculateNextDate(todayIso(), 30),
+  leukocytes: row?.leucocitos === "—" ? "" : row?.leucocitos || "",
+  neutrophils: row?.neutrofilos === "—" ? "" : row?.neutrofilos || "",
+  status: row?.statusValue || inferProgramStatus(row?.proximoHemograma || calculateNextDate(todayIso(), 30)),
+  responsible_professional_id: row?.responsibleId || "",
+  notes: row?.nota || "",
+});
+
+const laiDefaultForm = (row = null) => ({
+  patient_id: row?.patientDbId || "",
+  program_id: row?.programDbId || "",
+  medication_id: row?.medicationDbId || "",
+  drug: row?.farmaco || "",
+  dose: row?.dosis || "",
+  interval_days: row?.intervalDays || 28,
+  route: row?.route || "IM",
+  last_administration_date: row?.ultimaAdministracion || todayIso(),
+  next_administration_date: row?.proximaAdministracion || calculateNextDate(todayIso(), 28),
+  administration_site: row?.sitio === "—" ? "" : row?.sitio || "",
+  status: row?.statusValue || inferProgramStatus(row?.proximaAdministracion || calculateNextDate(todayIso(), 28)),
+  responsible_professional_id: row?.responsibleId || "",
+  notes: row?.nota || "",
+});
+
+const ensureMedicationForProgram = async ({ institutionId, patientId, medicationId, program, drug, dose, scheme, frequency, startDate, nextControlDate, responsibleId, followup }) => {
+  const payload = {
+    institution_id: institutionId,
+    patient_id: patientId,
+    drug,
+    dose: emptyToNull(dose),
+    scheme: emptyToNull(scheme),
+    frequency: emptyToNull(frequency),
+    start_date: emptyToNull(startDate),
+    next_control_date: emptyToNull(nextControlDate),
+    prescriber_professional_id: emptyToNull(responsibleId),
+    followup: emptyToNull(followup),
+    program,
+    is_active: true,
+  };
+
+  if (medicationId && !String(medicationId).startsWith("lai_")) {
+    const { data, error } = await supabase
+      .from("medications")
+      .update(payload)
+      .eq("id", medicationId)
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data.id;
+  }
+
+  const { data, error } = await supabase
+    .from("medications")
+    .insert(payload)
+    .select("id")
+    .single();
+  if (error) throw error;
+  return data.id;
+};
+
+const saveClozapineProgramToSupabase = async ({ form, row, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  const dbProfile = await getCurrentDbProfile(authSession);
+  const institutionId = dbProfile.institution_id;
+  const patientId = emptyToNull(form.patient_id);
+  if (!patientId) throw new Error("Selecciona un paciente.");
+  if (!emptyToNull(form.dose)) throw new Error("La dosis es obligatoria.");
+
+  const nextDate = emptyToNull(form.next_cbc_date) || calculateNextDate(form.last_cbc_date, form.cbc_frequency_days);
+  const status = form.status || inferProgramStatus(nextDate);
+  const medicationId = await ensureMedicationForProgram({
+    institutionId,
+    patientId,
+    medicationId: form.medication_id,
+    program: "clozapine",
+    drug: "Clozapina",
+    dose: form.dose,
+    scheme: form.scheme,
+    frequency: `Cada ${parseOptionalInt(form.cbc_frequency_days) || 30} días hemograma`,
+    startDate: form.start_date,
+    nextControlDate: nextDate,
+    responsibleId: form.responsible_professional_id,
+    followup: "Programa Clozapina: seguimiento hematológico obligatorio.",
+  });
+
+  const payload = {
+    institution_id: institutionId,
+    patient_id: patientId,
+    medication_id: medicationId,
+    dose: emptyToNull(form.dose),
+    scheme: emptyToNull(form.scheme),
+    start_date: emptyToNull(form.start_date),
+    cbc_frequency_days: parseOptionalInt(form.cbc_frequency_days) || 30,
+    last_cbc_date: emptyToNull(form.last_cbc_date),
+    next_cbc_date: nextDate,
+    leukocytes: parseOptionalNumber(form.leukocytes),
+    neutrophils: parseOptionalNumber(form.neutrophils),
+    status,
+    responsible_professional_id: emptyToNull(form.responsible_professional_id),
+    notes: emptyToNull(form.notes),
+    is_active: status !== "suspendido",
+  };
+
+  const existingId = form.program_id || row?.programDbId || null;
+  let saved;
+  if (existingId) {
+    const { data, error } = await supabase
+      .from("clozapine_programs")
+      .update(payload)
+      .eq("id", existingId)
+      .select("id,patient_id")
+      .single();
+    if (error) throw error;
+    saved = data;
+  } else {
+    const { data: existing } = await supabase
+      .from("clozapine_programs")
+      .select("id")
+      .eq("patient_id", patientId)
+      .maybeSingle();
+    if (existing?.id) {
+      const { data, error } = await supabase
+        .from("clozapine_programs")
+        .update(payload)
+        .eq("id", existing.id)
+        .select("id,patient_id")
+        .single();
+      if (error) throw error;
+      saved = data;
+    } else {
+      const { data, error } = await supabase
+        .from("clozapine_programs")
+        .insert(payload)
+        .select("id,patient_id")
+        .single();
+      if (error) throw error;
+      saved = data;
+    }
+  }
+
+  await insertTraceEvent({
+    institutionId,
+    patientId,
+    authSession,
+    action: "Programa clozapina actualizado desde app",
+    field: "clozapine_programs.next_cbc_date",
+    previousValue: row?.proximoHemograma || null,
+    nextValue: nextDate,
+    eventType: "edicion",
+  });
+  return saved;
+};
+
+const saveLaiProgramToSupabase = async ({ form, row, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  const dbProfile = await getCurrentDbProfile(authSession);
+  const institutionId = dbProfile.institution_id;
+  const patientId = emptyToNull(form.patient_id);
+  if (!patientId) throw new Error("Selecciona un paciente.");
+  if (!emptyToNull(form.drug)) throw new Error("El fármaco es obligatorio.");
+
+  const intervalDays = parseOptionalInt(form.interval_days) || 28;
+  const nextDate = emptyToNull(form.next_administration_date) || calculateNextDate(form.last_administration_date, intervalDays);
+  const status = form.status || inferProgramStatus(nextDate);
+  const medicationId = await ensureMedicationForProgram({
+    institutionId,
+    patientId,
+    medicationId: form.medication_id,
+    program: "lai",
+    drug: form.drug,
+    dose: form.dose,
+    scheme: `${form.route || "IM"}/${intervalDays}d`,
+    frequency: `Cada ${intervalDays} días`,
+    startDate: form.last_administration_date,
+    nextControlDate: nextDate,
+    responsibleId: form.responsible_professional_id,
+    followup: "Programa inyectables de depósito / LAI.",
+  });
+
+  const payload = {
+    institution_id: institutionId,
+    patient_id: patientId,
+    medication_id: medicationId,
+    drug: emptyToNull(form.drug),
+    dose: emptyToNull(form.dose),
+    interval_days: intervalDays,
+    route: emptyToNull(form.route) || "IM",
+    last_administration_date: emptyToNull(form.last_administration_date),
+    next_administration_date: nextDate,
+    administration_site: emptyToNull(form.administration_site),
+    status,
+    responsible_professional_id: emptyToNull(form.responsible_professional_id),
+    notes: emptyToNull(form.notes),
+    is_active: status !== "suspendido",
+  };
+
+  const existingId = form.program_id || row?.programDbId || null;
+  let saved;
+  if (existingId) {
+    const { data, error } = await supabase
+      .from("lai_programs")
+      .update(payload)
+      .eq("id", existingId)
+      .select("id,patient_id")
+      .single();
+    if (error) throw error;
+    saved = data;
+  } else {
+    const { data: existing } = await supabase
+      .from("lai_programs")
+      .select("id")
+      .eq("patient_id", patientId)
+      .eq("drug", form.drug)
+      .maybeSingle();
+    if (existing?.id) {
+      const { data, error } = await supabase
+        .from("lai_programs")
+        .update(payload)
+        .eq("id", existing.id)
+        .select("id,patient_id")
+        .single();
+      if (error) throw error;
+      saved = data;
+    } else {
+      const { data, error } = await supabase
+        .from("lai_programs")
+        .insert(payload)
+        .select("id,patient_id")
+        .single();
+      if (error) throw error;
+      saved = data;
+    }
+  }
+
+  await insertTraceEvent({
+    institutionId,
+    patientId,
+    authSession,
+    action: "Programa inyectable de depósito actualizado desde app",
+    field: "lai_programs.next_administration_date",
+    previousValue: row?.proximaAdministracion || null,
+    nextValue: nextDate,
+    eventType: "edicion",
+  });
+  return saved;
+};
+
+const ClinicalProgramModal = ({ type, row, authSession, onClose, onSaved }) => {
+  const isClozapine = type === "clozapine";
+  const [form, setForm] = useState(() => isClozapine ? clozapineDefaultForm(row) : laiDefaultForm(row));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const patientOptions = getVisiblePatientOptions();
+  const responsibleOptions = getResponsibleOptions();
+  const updateForm = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
+
+  const recalcNext = () => {
+    if (isClozapine) {
+      const next = calculateNextDate(form.last_cbc_date, form.cbc_frequency_days);
+      setForm(prev => ({ ...prev, next_cbc_date: next, status: inferProgramStatus(next) }));
+    } else {
+      const next = calculateNextDate(form.last_administration_date, form.interval_days);
+      setForm(prev => ({ ...prev, next_administration_date: next, status: inferProgramStatus(next) }));
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      if (isClozapine) await saveClozapineProgramToSupabase({ form, row, authSession });
+      else await saveLaiProgramToSupabase({ form, row, authSession });
+      await onSaved?.();
+      onClose();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo guardar el programa clínico.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm" onClick={onClose}>
+      <form onSubmit={submit} className="my-4 w-full max-w-3xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/50" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-800 bg-[#131920]/95 p-5 backdrop-blur">
+          <div>
+            <div className={`text-[10px] uppercase tracking-[0.22em] font-black ${isClozapine ? "text-red-400" : "text-violet-400"}`}>Etapa 6.4 · Programas reales</div>
+            <h2 className="mt-1 text-xl font-black text-white">{isClozapine ? "Seguimiento Clozapina" : "Inyectable de depósito / LAI"}</h2>
+            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase y deja trazabilidad automática del cambio.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-bold text-slate-300 hover:bg-slate-800">✕</button>
+        </div>
+
+        <div className="space-y-5 p-5">
+          {error && <div className="rounded-2xl border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 text-sm font-black text-slate-100">Paciente y responsable</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <FieldLabel>Paciente visible</FieldLabel>
+                <SelectInput disabled={Boolean(row?.patientDbId)} value={form.patient_id} onChange={v => updateForm("patient_id", v)}>
+                  <option value="">Seleccionar paciente</option>
+                  {patientOptions.map(p => <option key={p._dbId} value={p._dbId}>{p.id} · {p.initials} · {p.dx_main}</option>)}
+                </SelectInput>
+              </div>
+              <div>
+                <FieldLabel>Responsable</FieldLabel>
+                <SelectInput value={form.responsible_professional_id} onChange={v => updateForm("responsible_professional_id", v)}>
+                  <option value="">Sin responsable</option>
+                  {responsibleOptions.map(prof => <option key={prof.id} value={prof.id}>{prof.name} · {ROLE_LABELS[prof.role] || prof.role}</option>)}
+                </SelectInput>
+              </div>
+            </div>
+          </section>
+
+          {isClozapine ? (
+            <section className="rounded-2xl border border-red-900/50 bg-red-950/10 p-4">
+              <div className="mb-3 text-sm font-black text-slate-100">Clozapina y hemograma</div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div><FieldLabel>Dosis</FieldLabel><TextInput required value={form.dose} onChange={v => updateForm("dose", v)} placeholder="150 mg" /></div>
+                <div><FieldLabel>Esquema</FieldLabel><TextInput value={form.scheme} onChange={v => updateForm("scheme", v)} placeholder="0-0-1" /></div>
+                <div><FieldLabel>Inicio clozapina</FieldLabel><TextInput type="date" value={form.start_date} onChange={v => updateForm("start_date", v)} /></div>
+                <div><FieldLabel>Periodicidad hemograma (días)</FieldLabel><TextInput type="number" value={form.cbc_frequency_days} onChange={v => updateForm("cbc_frequency_days", v)} /></div>
+                <div><FieldLabel>Último hemograma</FieldLabel><TextInput type="date" value={form.last_cbc_date} onChange={v => updateForm("last_cbc_date", v)} /></div>
+                <div><FieldLabel>Próximo hemograma</FieldLabel><TextInput type="date" value={form.next_cbc_date} onChange={v => updateForm("next_cbc_date", v)} /></div>
+                <div><FieldLabel>Leucocitos</FieldLabel><TextInput value={form.leukocytes} onChange={v => updateForm("leukocytes", v)} placeholder="6200" /></div>
+                <div><FieldLabel>Neutrófilos / RAN</FieldLabel><TextInput value={form.neutrophils} onChange={v => updateForm("neutrophils", v)} placeholder="3400" /></div>
+                <div><FieldLabel>Estado</FieldLabel><SelectInput value={form.status} onChange={v => updateForm("status", v)}>{CLINICAL_PROGRAM_STATUS_OPTIONS.map(x => <option key={x} value={x}>{x}</option>)}</SelectInput></div>
+              </div>
+              <button type="button" onClick={recalcNext} className="mt-3 rounded-xl border border-red-700 bg-red-950/30 px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-900/30">Calcular próximo hemograma</button>
+              <div className="mt-3"><FieldLabel>Notas</FieldLabel><TextAreaInput rows={3} value={form.notes} onChange={v => updateForm("notes", v)} /></div>
+            </section>
+          ) : (
+            <section className="rounded-2xl border border-violet-900/50 bg-violet-950/10 p-4">
+              <div className="mb-3 text-sm font-black text-slate-100">Inyectable de depósito</div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div><FieldLabel>Fármaco</FieldLabel><TextInput required value={form.drug} onChange={v => updateForm("drug", v)} placeholder="Paliperidona / Risperidona LAI" /></div>
+                <div><FieldLabel>Dosis</FieldLabel><TextInput value={form.dose} onChange={v => updateForm("dose", v)} placeholder="100 mg" /></div>
+                <div><FieldLabel>Vía</FieldLabel><TextInput value={form.route} onChange={v => updateForm("route", v)} placeholder="IM" /></div>
+                <div><FieldLabel>Periodicidad (días)</FieldLabel><TextInput type="number" value={form.interval_days} onChange={v => updateForm("interval_days", v)} /></div>
+                <div><FieldLabel>Última administración</FieldLabel><TextInput type="date" value={form.last_administration_date} onChange={v => updateForm("last_administration_date", v)} /></div>
+                <div><FieldLabel>Próxima administración</FieldLabel><TextInput type="date" value={form.next_administration_date} onChange={v => updateForm("next_administration_date", v)} /></div>
+                <div><FieldLabel>Sitio administración</FieldLabel><TextInput value={form.administration_site} onChange={v => updateForm("administration_site", v)} placeholder="Deltoides izquierdo" /></div>
+                <div><FieldLabel>Estado</FieldLabel><SelectInput value={form.status} onChange={v => updateForm("status", v)}>{CLINICAL_PROGRAM_STATUS_OPTIONS.map(x => <option key={x} value={x}>{x}</option>)}</SelectInput></div>
+              </div>
+              <button type="button" onClick={recalcNext} className="mt-3 rounded-xl border border-violet-700 bg-violet-950/30 px-3 py-2 text-xs font-bold text-violet-300 hover:bg-violet-900/30">Calcular próxima administración</button>
+              <div className="mt-3"><FieldLabel>Notas</FieldLabel><TextAreaInput rows={3} value={form.notes} onChange={v => updateForm("notes", v)} /></div>
+            </section>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 rounded-b-3xl border-t border-slate-800 bg-[#0d1117]/95 p-4 backdrop-blur">
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+          <button type="submit" disabled={saving} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
+            {saving ? "Guardando…" : "Guardar programa"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 // ─── PATIENT CARD ──────────────────────────────────────────────────────────
 const PatientCard = ({ patient, onClick }) => {
   const rc = getRiskCfg(patient.risk);
@@ -882,7 +2007,7 @@ const PatientCard = ({ patient, onClick }) => {
 };
 
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
-const PatientDetail = ({ patient, onClose }) => {
+const PatientDetail = ({ patient, onClose, onEdit }) => {
   const [tab, setTab] = useState("resumen");
   const rc = getRiskCfg(patient.risk);
   const patAlerts = ALERTS.filter(a => a.patient === patient.id);
@@ -915,7 +2040,17 @@ const PatientDetail = ({ patient, onClose }) => {
               <div className="text-slate-400 text-sm">{patient.age} años · {patient.gender === "F" ? "Femenino" : "Masculino"}</div>
             </div>
             <div className="flex flex-col items-end gap-2">
-              <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+              <div className="flex items-center gap-2">
+                {onEdit && (
+                  <button
+                    onClick={() => onEdit(patient)}
+                    className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-800/50"
+                  >
+                    Editar
+                  </button>
+                )}
+                <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+              </div>
               <RiskBadge risk={patient.risk} />
               <StatusBadge status={patient.status} />
             </div>
@@ -1259,11 +2394,18 @@ const Dashboard = ({ setPage }) => {
 };
 
 // ─── PACIENTES ────────────────────────────────────────────────────────────
-const PacientesView = ({ search, workspaceKey }) => {
+const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataChanged, activeInstitution }) => {
   const [selected, setSelected] = useState(null);
   const [riskFilter, setRiskFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [viewMode, setViewMode] = useState("grid");
+  const [formMode, setFormMode] = useState(null);
+  const [editingPatient, setEditingPatient] = useState(null);
+  const isAdmin = authProfile?.role === "admin" || ACTIVE_USER_ID === "admin";
+
+  const openCreate = () => { setEditingPatient(null); setFormMode("create"); };
+  const openEdit = (patient) => { setSelected(null); setEditingPatient(patient); setFormMode("edit"); };
+  const closeForm = () => { setFormMode(null); setEditingPatient(null); };
 
   const filtered = useMemo(() => PATIENTS.filter(p => {
     const q = search.toLowerCase();
@@ -1275,7 +2417,18 @@ const PacientesView = ({ search, workspaceKey }) => {
 
   return (
     <div>
-      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} />}
+      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} />}
+      {formMode && (
+        <PatientFormModal
+          mode={formMode}
+          patient={editingPatient}
+          authSession={authSession}
+          authProfile={authProfile}
+          activeInstitution={activeInstitution || workspaceKey}
+          onClose={closeForm}
+          onSaved={onDataChanged}
+        />
+      )}
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3 mb-5">
         <div className="flex items-center gap-2">
@@ -1291,11 +2444,28 @@ const PacientesView = ({ search, workspaceKey }) => {
           ))}
         </div>
         <div className="flex items-center gap-2 ml-auto">
+          {USING_SUPABASE_DATA && (
+            <button
+              onClick={openCreate}
+              disabled={!isAdmin}
+              title={isAdmin ? "Crear paciente en Supabase" : "Solo administrador puede crear pacientes en esta versión"}
+              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              + Nuevo paciente
+            </button>
+          )}
           <button onClick={() => setViewMode("grid")} className={`px-2 py-1 text-xs rounded border ${viewMode==="grid" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>▦ Tarjetas</button>
           <button onClick={() => setViewMode("table")} className={`px-2 py-1 text-xs rounded border ${viewMode==="table" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>≡ Tabla</button>
         </div>
       </div>
-      <div className="text-xs text-slate-500 mb-3">{filtered.length} paciente{filtered.length!==1?"s":""}</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""}</div>
+        {USING_SUPABASE_DATA && (
+          <div className="text-[10px] text-slate-500">
+            {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes editar pacientes asignados. La reasignación de equipo queda para admin."}
+          </div>
+        )}
+      </div>
 
       {viewMode === "grid" ? (
         <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
@@ -1471,7 +2641,9 @@ const AlertasView = () => {
 
 
 // ─── PROGRAMA CLOZAPINA ──────────────────────────────────────────────────
-const ProgramaClozapinaView = () => {
+const ProgramaClozapinaView = ({ authSession, onDataChanged }) => {
+  const [modalRow, setModalRow] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const rows = getClozapineRows();
   const exportRows = rows.map(r => ({
     paciente: r.paciente,
@@ -1490,15 +2662,21 @@ const ProgramaClozapinaView = () => {
     responsable: r.responsable,
     nota: r.nota,
   }));
+  const openNew = () => { setModalRow(null); setModalOpen(true); };
+  const openEdit = (row) => { setModalRow(row); setModalOpen(true); };
   return (
     <div className="space-y-5">
+      {modalOpen && <ClinicalProgramModal type="clozapine" row={modalRow} authSession={authSession} onClose={() => setModalOpen(false)} onSaved={onDataChanged} />}
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-red-800/50 bg-red-900/10 p-5">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-red-400 font-black">Programa exclusivo</div>
           <div className="mt-1 text-xl font-black text-slate-100">Seguimiento de Clozapina</div>
-          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-400">Control operativo de dosis, esquema, periodicidad, último hemograma y próxima fecha esperada. En esta demo se filtra por institución y por usuario activo.</p>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-400">Control real en Supabase: dosis, esquema, periodicidad, último hemograma, próxima fecha, leucocitos, neutrófilos y responsable.</p>
         </div>
-        <ExportButton rows={exportRows} filename={`programa_clozapina_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} />
+        <div className="flex flex-wrap gap-2">
+          <button onClick={openNew} className="rounded-full bg-red-600 px-3 py-1.5 text-xs font-black text-white shadow-lg shadow-red-950/40 hover:bg-red-500">+ Ingresar / actualizar</button>
+          <ExportButton rows={exportRows} filename={`programa_clozapina_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} />
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3">
@@ -1516,13 +2694,13 @@ const ProgramaClozapinaView = () => {
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay pacientes visibles en programa de clozapina para esta sesión.</div>
+        <div className="rounded-xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay pacientes visibles en programa de clozapina para esta sesión. Usa “Ingresar / actualizar” para agregar uno.</div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-[#131920]">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wider">
-                {["Paciente","Riesgo","Dosis","Esquema","Último hemograma","Próximo hemograma","Estado","RAN/GB","Responsable","Nota"].map(h => <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>)}
+                {["Paciente","Riesgo","Dosis","Esquema","Último hemograma","Próximo hemograma","Estado","RAN/GB","Responsable","Nota","Acción"].map(h => <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -1538,6 +2716,7 @@ const ProgramaClozapinaView = () => {
                   <td className="px-3 py-3 text-slate-300"><div>RAN {r.neutrofilos}</div><div className="text-[10px] text-slate-500">GB {r.leucocitos}</div></td>
                   <td className="px-3 py-3 text-slate-400">{r.responsable}</td>
                   <td className="px-3 py-3 max-w-[220px] text-slate-500">{r.nota}</td>
+                  <td className="px-3 py-3"><button onClick={() => openEdit(r)} className="rounded-lg border border-sky-700 px-2 py-1 text-[10px] font-bold text-sky-400 hover:bg-sky-950/40">Actualizar</button></td>
                 </tr>
               ))}
             </tbody>
@@ -1550,7 +2729,9 @@ const ProgramaClozapinaView = () => {
 };
 
 // ─── PROGRAMA INYECTABLES DE DEPÓSITO ────────────────────────────────────
-const ProgramaInyectablesView = () => {
+const ProgramaInyectablesView = ({ authSession, onDataChanged }) => {
+  const [modalRow, setModalRow] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const rows = getDepotRows();
   const exportRows = rows.map(r => ({
     paciente: r.paciente,
@@ -1568,15 +2749,21 @@ const ProgramaInyectablesView = () => {
     responsable: r.responsable,
     nota: r.nota,
   }));
+  const openNew = () => { setModalRow(null); setModalOpen(true); };
+  const openEdit = (row) => { setModalRow(row); setModalOpen(true); };
   return (
     <div className="space-y-5">
+      {modalOpen && <ClinicalProgramModal type="lai" row={modalRow} authSession={authSession} onClose={() => setModalOpen(false)} onSaved={onDataChanged} />}
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-violet-800/50 bg-violet-900/10 p-5">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-violet-400 font-black">Programa exclusivo</div>
           <div className="mt-1 text-xl font-black text-slate-100">Inyectables de depósito</div>
-          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-400">Seguimiento de LAI/depot: dosis, periodicidad, última administración, próxima fecha, sitio y responsable.</p>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-400">Seguimiento real de LAI/depot: dosis, periodicidad, última administración, próxima fecha, sitio, responsable y trazabilidad.</p>
         </div>
-        <ExportButton rows={exportRows} filename={`programa_inyectables_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} />
+        <div className="flex flex-wrap gap-2">
+          <button onClick={openNew} className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-black text-white shadow-lg shadow-violet-950/40 hover:bg-violet-500">+ Registrar LAI</button>
+          <ExportButton rows={exportRows} filename={`programa_inyectables_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} />
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3">
@@ -1594,13 +2781,13 @@ const ProgramaInyectablesView = () => {
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay pacientes visibles con inyectables de depósito para esta sesión.</div>
+        <div className="rounded-xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay pacientes visibles con inyectables de depósito para esta sesión. Usa “Registrar LAI” para agregar uno.</div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-[#131920]">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wider">
-                {["Paciente","Riesgo","Fármaco","Dosis","Periodicidad","Última adm.","Próxima adm.","Estado","Sitio","Responsable","Nota"].map(h => <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>)}
+                {["Paciente","Riesgo","Fármaco","Dosis","Periodicidad","Última adm.","Próxima adm.","Estado","Sitio","Responsable","Nota","Acción"].map(h => <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -1617,6 +2804,7 @@ const ProgramaInyectablesView = () => {
                   <td className="px-3 py-3 text-slate-400">{r.sitio}</td>
                   <td className="px-3 py-3 text-slate-400">{r.responsable}</td>
                   <td className="px-3 py-3 max-w-[220px] text-slate-500">{r.nota}</td>
+                  <td className="px-3 py-3"><button onClick={() => openEdit(r)} className="rounded-lg border border-sky-700 px-2 py-1 text-[10px] font-bold text-sky-400 hover:bg-sky-950/40">Actualizar</button></td>
                 </tr>
               ))}
             </tbody>
@@ -2133,7 +3321,7 @@ const AuthGate = ({ children }) => {
           <div className="mb-6">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-600 text-lg font-black text-white">CC</div>
             <div className="mt-4 text-2xl font-black text-white">ClinCoord Mental</div>
-            <div className="mt-1 text-sm text-slate-400">Etapa 4 · Login real con Supabase Auth</div>
+            <div className="mt-1 text-sm text-slate-400">Etapa 6.4 · Programas clínicos editables</div>
           </div>
           <form onSubmit={handleAuth} className="space-y-3">
             <div>
@@ -2153,7 +3341,7 @@ const AuthGate = ({ children }) => {
             {mode === "signup" ? "Ya tengo cuenta" : "Crear cuenta nueva"}
           </button>
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 p-3 text-xs leading-relaxed text-slate-500">
-            Para aplicar permisos demo por usuario, crea usuarios en Supabase con emails del mapa, por ejemplo <span className="font-mono text-sky-400">admin@clincoord.demo</span> o <span className="font-mono text-sky-400">valentina@clincoord.demo</span>. En producción esto debe pasar a tabla de perfiles y políticas RLS.
+            Ingresa con un usuario creado en Supabase Auth. La app leerá su perfil desde <span className="font-mono text-sky-400">public.profiles</span> y los datos visibles quedarán filtrados por RLS.
           </div>
         </div>
       </div>
@@ -2172,12 +3360,63 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   const [activeInstitution, setActiveInstitutionRaw] = useState(authProfile?.institution || "centro_medico");
   const [activeUser, setActiveUser] = useState(authProfile?.appUserId || "admin");
   const [themeMode, setThemeMode] = useState("dark");
+  const [dataVersion, setDataVersion] = useState(0);
+  const [dbState, setDbState] = useState({ loading: Boolean(authLocked && isSupabaseConfigured), error: "", source: authLocked ? "supabase" : "demo" });
+
   useEffect(() => {
     if (!authProfile) return;
     setActiveInstitutionRaw(authProfile.institution || "centro_medico");
     setActiveUser(authProfile.appUserId || "admin");
     setSearch("");
   }, [authProfile?.appUserId, authProfile?.institution]);
+
+  const refreshWorkspaceData = async () => {
+    if (!authLocked || !authSession?.user?.id || !isSupabaseConfigured) {
+      setDbState({ loading: false, error: "", source: "demo" });
+      return;
+    }
+    setDbState({ loading: true, error: "", source: "supabase" });
+    try {
+      const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
+      setActiveInstitutionRaw(dbAuthProfile?.institution || "centro_medico");
+      setActiveUser(dbAuthProfile?.appUserId || "admin");
+      setSearch("");
+      setDataVersion(v => v + 1);
+      setDbState({ loading: false, error: "", source: "supabase" });
+    } catch (error) {
+      console.error("Error cargando datos desde Supabase", error);
+      setDbState({ loading: false, error: error?.message || "No se pudieron cargar los datos desde Supabase.", source: "supabase" });
+    }
+  };
+
+  useEffect(() => {
+    refreshWorkspaceData();
+  }, [authLocked, authSession?.user?.id, authSession?.access_token]);
+
+  if (dbState.loading) {
+    return (
+      <div className="min-h-screen bg-[#080d13] text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md rounded-3xl border border-slate-800 bg-[#131920] p-6 text-center shadow-2xl shadow-black/40">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-600 text-white font-black">CC</div>
+          <div className="text-lg font-black text-white">Cargando datos reales desde Supabase…</div>
+          <div className="mt-2 text-sm text-slate-400">Aplicando permisos por institución y equipo tratante.</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (dbState.error) {
+    return (
+      <div className="min-h-screen bg-[#080d13] text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-lg rounded-3xl border border-red-800 bg-[#131920] p-6 shadow-2xl shadow-black/40">
+          <div className="text-xl font-black text-red-400">No se pudieron cargar los datos</div>
+          <div className="mt-3 rounded-2xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">{dbState.error}</div>
+          <div className="mt-4 text-sm text-slate-400">Revisa que hayas ejecutado las etapas 5.1, 5.2, 5.3 y 5.4 en Supabase.</div>
+          {onLogout && <button onClick={onLogout} className="mt-5 rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white hover:bg-sky-500">Cerrar sesión</button>}
+        </div>
+      </div>
+    );
+  }
 
   const setActiveInstitution = (institutionId) => {
     setActiveInstitutionRaw(institutionId);
@@ -2197,15 +3436,15 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   };
 
   const renderPage = () => (
-    <div key={`${activeInstitution}-${page}`} className="space-y-5">
+    <div key={`${activeInstitution}-${page}-${dataVersion}`} className="space-y-5">
       <InstitutionSummary activeInstitution={activeInstitution} />
       {page === "dashboard"      && <Dashboard setPage={setPage} />}
-      {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} />}
+      {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} activeInstitution={activeInstitution} authSession={authSession} authProfile={authProfile} onDataChanged={refreshWorkspaceData} />}
       {page === "profesionales"  && <ProfesionalesView />}
       {page === "alertas"        && <AlertasView />}
       {page === "farmacoterapia" && <FarmacoterapiaView />}
-      {page === "clozapina"      && <ProgramaClozapinaView />}
-      {page === "inyectables"    && <ProgramaInyectablesView />}
+      {page === "clozapina"      && <ProgramaClozapinaView authSession={authSession} onDataChanged={refreshWorkspaceData} />}
+      {page === "inyectables"    && <ProgramaInyectablesView authSession={authSession} onDataChanged={refreshWorkspaceData} />}
       {page === "trazabilidad"   && <TrazabilidadView />}
       {page === "estadisticas"   && <EstadisticasView />}
       {page === "inbox"          && <InboxView />}
