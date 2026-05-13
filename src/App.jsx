@@ -44,10 +44,53 @@ const INSTITUTIONS = [
 let ACTIVE_INSTITUTION_ID = "centro_medico";
 let ACTIVE_USER_ID = "admin";
 let USING_SUPABASE_DATA = false;
-const getInstitution = (id) => INSTITUTIONS.find(i => i.id === id) || INSTITUTIONS[0];
+let ACCESSIBLE_INSTITUTIONS = [...INSTITUTIONS];
+let ACTIVE_MEMBERSHIPS_BY_INSTITUTION = {};
+
+const slugifyWorkspaceId = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, "_")
+  .replace(/^_+|_+$/g, "");
+
 const normalizeWorkspaceId = (institution) => {
-  const slug = (institution?.slug || institution?.kind || institution || "").toString().toLowerCase();
-  return slug.includes("hospital") ? "hospital" : "centro_medico";
+  const raw = institution?.slug || institution?.kind || institution?.id || institution || "";
+  const id = slugifyWorkspaceId(raw);
+  if (["centro_medico", "centromedico", "centro_medico_demo"].includes(id)) return "centro_medico";
+  if (id === "centro_medico") return "centro_medico";
+  if (id === "hospital") return "hospital";
+  return id || "centro_medico";
+};
+const workspaceToInstitutionSlug = (workspaceId) => workspaceId === "centro_medico" ? "centro-medico" : String(workspaceId || "").replaceAll("_", "-");
+const getAccessibleInstitutions = () => ACCESSIBLE_INSTITUTIONS?.length ? ACCESSIBLE_INSTITUTIONS : INSTITUTIONS;
+const getInstitution = (id) => getAccessibleInstitutions().find(i => i.id === id) || INSTITUTIONS.find(i => i.id === id) || {
+  id,
+  label: String(id || "Institución").replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase()),
+  short: String(id || "Inst").slice(0, 12),
+  icon: "🏥",
+  tone: "sky",
+  description: "Institución clínica configurada en Supabase.",
+};
+const setAccessibleInstitutionsFromMemberships = (memberships = []) => {
+  const seen = new Set();
+  const items = memberships.map(m => m.institutionUi).filter(Boolean).filter(inst => {
+    if (seen.has(inst.id)) return false;
+    seen.add(inst.id);
+    return true;
+  });
+  ACCESSIBLE_INSTITUTIONS = items.length ? items : [...INSTITUTIONS];
+  ACTIVE_MEMBERSHIPS_BY_INSTITUTION = memberships.reduce((acc, m) => {
+    acc[m.institution] = m;
+    return acc;
+  }, {});
+};
+const getMembershipForWorkspace = (workspaceId) => ACTIVE_MEMBERSHIPS_BY_INSTITUTION?.[workspaceId] || null;
+const getAppUserIdForWorkspace = (workspaceId, fallback = "admin") => {
+  const membership = getMembershipForWorkspace(workspaceId);
+  if (!membership) return fallback;
+  return membership.role === "admin" ? "admin" : (membership.professionalId || fallback);
 };
 const normalizeRoleForApp = (role) => role === "terapeuta_ocupacional" ? "terapeuta" : role;
 
@@ -476,12 +519,24 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,institution_id,professional_id,institutions(id,slug,name,kind)")
+    .select("id,email,full_name,is_active")
     .eq("id", session.user.id)
     .single();
 
   if (profileError) throw profileError;
-  if (!profile) throw new Error("No existe perfil en public.profiles para este usuario. Ejecuta la etapa 5.3 o crea el perfil correspondiente.");
+  if (!profile) throw new Error("No existe perfil en public.profiles para este usuario. Crea el perfil y sus memberships en Supabase.");
+  if (profile.is_active === false) throw new Error("Tu perfil está desactivado.");
+
+  const { data: membershipsDb, error: membershipsError } = await supabase
+    .from("memberships")
+    .select("id,user_id,institution_id,professional_id,role,is_default,is_active,created_at,institutions(id,slug,name,kind,description),professionals(id,full_name,role,specialty,email,initials,avatar_color)")
+    .eq("user_id", session.user.id)
+    .eq("is_active", true)
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: true });
+
+  if (membershipsError) throw membershipsError;
+  if (!membershipsDb?.length) throw new Error("Tu usuario no tiene membresías institucionales activas. Revisa public.memberships.");
 
   const [
     institutionsRes,
@@ -526,9 +581,35 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const filesDb = filesRes.data || [];
 
   const institutionById = new Map(institutions.map(i => [i.id, i]));
-  if (profile.institutions && !institutionById.has(profile.institution_id)) {
-    institutionById.set(profile.institution_id, profile.institutions);
-  }
+  membershipsDb.forEach(m => {
+    if (m.institutions && !institutionById.has(m.institution_id)) {
+      institutionById.set(m.institution_id, m.institutions);
+    }
+  });
+
+  const membershipRows = membershipsDb.map(m => {
+    const instRecord = m.institutions || institutionById.get(m.institution_id) || {};
+    const workspaceId = normalizeWorkspaceId(instRecord);
+    const fallbackInst = INSTITUTIONS.find(i => i.id === workspaceId) || INSTITUTIONS[0];
+    return {
+      id: m.id,
+      institution: workspaceId,
+      institutionDbId: m.institution_id,
+      role: m.role,
+      professionalId: m.professional_id,
+      isDefault: Boolean(m.is_default),
+      label: instRecord.name || fallbackInst.label,
+      professionalName: m.professionals?.full_name || profile.full_name || profile.email,
+      institutionUi: {
+        ...fallbackInst,
+        id: workspaceId,
+        label: instRecord.name || fallbackInst.label,
+        short: (instRecord.name || fallbackInst.short || fallbackInst.label).replace(/^Centro Médico$/i, "Centro"),
+        description: instRecord.description || fallbackInst.description,
+      },
+    };
+  });
+  setAccessibleInstitutionsFromMemberships(membershipRows);
 
   const professionalRows = professionalsDb.map(pr => ({
     id: pr.id,
@@ -749,14 +830,20 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   replaceCollection(RAW_FILES, fileRows);
   USING_SUPABASE_DATA = true;
 
-  const workspaceId = normalizeWorkspaceId(profile.institutions || institutionById.get(profile.institution_id));
+  const defaultMembership = membershipRows.find(m => m.isDefault) || membershipRows[0];
+  const workspaceId = defaultMembership?.institution || "centro_medico";
   return {
     authProfile: {
-      appUserId: profile.role === "admin" ? "admin" : profile.professional_id,
+      appUserId: getAppUserIdForWorkspace(workspaceId, "admin"),
       institution: workspaceId,
       label: profile.full_name || profile.email,
-      role: profile.role,
+      role: defaultMembership?.role || "admin",
       email: profile.email,
+      memberships: membershipRows,
+      membershipByInstitution: membershipRows.reduce((acc, m) => {
+        acc[m.institution] = m;
+        return acc;
+      }, {}),
     },
     counts: {
       patients: patientRows.length,
@@ -1018,7 +1105,7 @@ const ThemeToggle = ({ themeMode, setThemeMode }) => {
 
 const InstitutionSwitcher = ({ activeInstitution, setActiveInstitution, compact = false }) => (
   <div className={`flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 p-1 ${compact ? "w-full" : "flex-shrink-0"}`}>
-    {INSTITUTIONS.map(inst => {
+    {getAccessibleInstitutions().map(inst => {
       const active = inst.id === activeInstitution;
       return (
         <button
@@ -1164,7 +1251,6 @@ const MobileBottomNav = ({ active, setActive }) => (
 
 
 // ─── FORMULARIOS REALES SUPABASE: PACIENTES Y EQUIPO ──────────────────────
-const workspaceToInstitutionSlug = (workspaceId) => workspaceId === "hospital" ? "hospital" : "centro-medico";
 const emptyToNull = (value) => {
   const v = String(value ?? "").trim();
   return v ? v : null;
@@ -1227,17 +1313,39 @@ const getInstitutionIdForWorkspace = async (workspaceId) => {
   return data.id;
 };
 
-const getCurrentDbProfile = async (authSession) => {
+const getCurrentDbProfile = async (authSession, workspaceId = ACTIVE_INSTITUTION_ID) => {
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
-  const { data, error } = await supabase
+
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,institution_id,professional_id,is_active,institutions(id,slug,kind,name)")
+    .select("id,email,full_name,is_active")
     .eq("id", authSession.user.id)
     .single();
-  if (error) throw error;
-  if (!data?.id) throw new Error("Tu usuario no tiene perfil en Supabase. Revisa la etapa 5.3.");
-  if (data.is_active === false) throw new Error("Tu perfil está desactivado.");
-  return data;
+  if (profileError) throw profileError;
+  if (!profile?.id) throw new Error("Tu usuario no tiene perfil en Supabase.");
+  if (profile.is_active === false) throw new Error("Tu perfil está desactivado.");
+
+  const { data: memberships, error: membershipError } = await supabase
+    .from("memberships")
+    .select("id,institution_id,professional_id,role,is_default,is_active,institutions(id,slug,kind,name)")
+    .eq("user_id", authSession.user.id)
+    .eq("is_active", true);
+  if (membershipError) throw membershipError;
+  if (!memberships?.length) throw new Error("Tu usuario no tiene membresías institucionales activas.");
+
+  const membership = memberships.find(m => normalizeWorkspaceId(m.institutions) === workspaceId)
+    || memberships.find(m => m.is_default)
+    || memberships[0];
+  if (!membership) throw new Error("No tienes acceso a esta institución.");
+
+  return {
+    ...profile,
+    role: membership.role,
+    institution_id: membership.institution_id,
+    professional_id: membership.professional_id,
+    institutions: membership.institutions,
+    membership_id: membership.id,
+  };
 };
 
 const insertTraceEvent = async ({ institutionId, patientId, authSession, action, field, previousValue, nextValue, eventType = "edicion" }) => {
@@ -1304,16 +1412,11 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
 
-  // v1.4.2: la institución y el rol se toman desde public.profiles,
-  // no desde el selector visual. Esto evita errores RLS cuando el usuario
-  // autenticado pertenece a Centro Médico pero la UI quedó en Hospital, o viceversa.
-  const dbProfile = await getCurrentDbProfile(authSession);
+  // v1.6: la institución se toma desde la membresía activa seleccionada en la app.
+  // Una misma cuenta puede tener varias instituciones, cada una con rol propio.
+  const dbProfile = await getCurrentDbProfile(authSession, activeInstitution || ACTIVE_INSTITUTION_ID);
   const isAdmin = dbProfile.role === "admin";
   const institutionId = dbProfile.institution_id;
-
-  if (activeInstitution && normalizeWorkspaceId(dbProfile.institutions) !== activeInstitution) {
-    console.warn("La institución visual no coincide con el perfil. Se usará la institución del perfil Supabase.");
-  }
 
   const payload = buildPatientPayload(form, institutionId, authSession, mode === "create");
   if (!payload.clinical_code) throw new Error("El código clínico es obligatorio.");
@@ -1322,19 +1425,36 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   if (mode === "create") {
     if (!isAdmin) throw new Error("Solo un administrador de la institución puede crear pacientes nuevos. Entra con admin@clincoord.demo o h-admin@clincoord.demo.");
 
-    // v1.4.2: la creación se hace por RPC SECURITY DEFINER.
-    // Supabase valida el usuario con auth.uid(), toma la institución desde public.profiles
-    // y crea paciente + equipo en una sola operación. Esto evita falsos errores RLS
-    // cuando el frontend envía institution_id o created_by de forma distinta a la política.
-    const { data, error } = await supabase.rpc("clincoord_create_patient", {
-      p_patient: payload,
+    // v1.6: la creación se hace por RPC multi-institución.
+    // La función recibe explícitamente la institución activa y Supabase valida
+    // que el usuario sea admin de esa institución mediante memberships.
+    const { data, error } = await supabase.rpc("clincoord_create_patient_v2", {
+      p_institution_id: institutionId,
+      p_clinical_code: payload.clinical_code,
+      p_initials: payload.initials,
+      p_age: payload.age,
+      p_gender: payload.gender,
+      p_dx_main: payload.dx_main,
+      p_dx_secondary: payload.dx_secondary,
+      p_risk: payload.risk,
+      p_status: payload.status,
+      p_suicide_risk: payload.suicide_risk,
+      p_hetero_risk: payload.hetero_risk,
+      p_social_risk: payload.social_risk,
+      p_substances: payload.substances,
+      p_adherence: payload.adherence,
+      p_functional_status: payload.functional_status,
+      p_support_network: payload.support_network,
+      p_admission_date: payload.admission_date,
+      p_last_contact_date: payload.last_contact_date,
+      p_next_control_date: payload.next_control_date,
+      p_notes: payload.notes,
       p_team: buildTeamRowsForRpc(team),
     });
     if (error) throw error;
 
-    const created = Array.isArray(data) ? data[0] : data;
-    if (!created?.id) throw new Error("El paciente fue creado, pero Supabase no devolvió su identificador.");
-    return created;
+    if (!data) throw new Error("El paciente fue creado, pero Supabase no devolvió su identificador.");
+    return { id: data, clinical_code: payload.clinical_code };
   }
 
   if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
@@ -1458,7 +1578,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
   const [team, setTeam] = useState(() => mode === "edit" ? patientToTeam(patient) : patientToTeam(null));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const isAdmin = authProfile?.role === "admin" || ACTIVE_USER_ID === "admin";
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
   const canManageTeam = isAdmin;
   const canCreate = mode !== "create" || isAdmin;
   const updateForm = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
@@ -2401,7 +2521,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const [viewMode, setViewMode] = useState("grid");
   const [formMode, setFormMode] = useState(null);
   const [editingPatient, setEditingPatient] = useState(null);
-  const isAdmin = authProfile?.role === "admin" || ACTIVE_USER_ID === "admin";
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
   const openCreate = () => { setEditingPatient(null); setFormMode("create"); };
   const openEdit = (patient) => { setSelected(null); setEditingPatient(patient); setFormMode("edit"); };
@@ -3362,9 +3482,11 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   const [themeMode, setThemeMode] = useState("dark");
   const [dataVersion, setDataVersion] = useState(0);
   const [dbState, setDbState] = useState({ loading: Boolean(authLocked && isSupabaseConfigured), error: "", source: authLocked ? "supabase" : "demo" });
+  const [runtimeAuthProfile, setRuntimeAuthProfile] = useState(authProfile);
 
   useEffect(() => {
     if (!authProfile) return;
+    setRuntimeAuthProfile(authProfile);
     setActiveInstitutionRaw(authProfile.institution || "centro_medico");
     setActiveUser(authProfile.appUserId || "admin");
     setSearch("");
@@ -3378,8 +3500,9 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     setDbState({ loading: true, error: "", source: "supabase" });
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
+      setRuntimeAuthProfile(dbAuthProfile);
       setActiveInstitutionRaw(dbAuthProfile?.institution || "centro_medico");
-      setActiveUser(dbAuthProfile?.appUserId || "admin");
+      setActiveUser(getAppUserIdForWorkspace(dbAuthProfile?.institution || "centro_medico", dbAuthProfile?.appUserId || "admin"));
       setSearch("");
       setDataVersion(v => v + 1);
       setDbState({ loading: false, error: "", source: "supabase" });
@@ -3418,9 +3541,10 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     );
   }
 
+  const effectiveAuthProfile = runtimeAuthProfile || authProfile;
   const setActiveInstitution = (institutionId) => {
     setActiveInstitutionRaw(institutionId);
-    setActiveUser(authLocked ? (authProfile?.appUserId || "admin") : "admin");
+    setActiveUser(authLocked ? getAppUserIdForWorkspace(institutionId, effectiveAuthProfile?.appUserId || "admin") : "admin");
     setSearch("");
   };
   ACTIVE_INSTITUTION_ID = activeInstitution;
@@ -3439,7 +3563,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     <div key={`${activeInstitution}-${page}-${dataVersion}`} className="space-y-5">
       <InstitutionSummary activeInstitution={activeInstitution} />
       {page === "dashboard"      && <Dashboard setPage={setPage} />}
-      {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} activeInstitution={activeInstitution} authSession={authSession} authProfile={authProfile} onDataChanged={refreshWorkspaceData} />}
+      {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} activeInstitution={activeInstitution} authSession={authSession} authProfile={effectiveAuthProfile} onDataChanged={refreshWorkspaceData} />}
       {page === "profesionales"  && <ProfesionalesView />}
       {page === "alertas"        && <AlertasView />}
       {page === "farmacoterapia" && <FarmacoterapiaView />}
