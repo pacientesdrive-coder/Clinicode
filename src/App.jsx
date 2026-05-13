@@ -20,6 +20,34 @@ const STATUS_CONFIG = {
   hospitalizado:{ label: "Hospitalizado",color: "text-orange-400 bg-orange-900/30 border-orange-700"   },
 };
 
+// ─── V1.9 · TEMAS Y COLORES CLÍNICOS ─────────────────────────────────────
+const APP_THEMES = {
+  nocturno: { label:"Violeta nocturno", icon:"🌙", accent:"#8b5cf6", accent2:"#38bdf8", shell:"#080d13", card:"#131920", soft:"#0f172a", text:"#f8fafc" },
+  clinico:  { label:"Azul clínico",    icon:"🩺", accent:"#0ea5e9", accent2:"#22d3ee", shell:"#07111f", card:"#0f1b2d", soft:"#10243a", text:"#f8fafc" },
+  bosque:   { label:"Verde salud",     icon:"🌿", accent:"#10b981", accent2:"#a3e635", shell:"#07140f", card:"#0f1f19", soft:"#142b22", text:"#f8fafc" },
+  ambar:    { label:"Ámbar contraste", icon:"⚡", accent:"#f59e0b", accent2:"#fb7185", shell:"#151008", card:"#22190d", soft:"#2d2111", text:"#fff7ed" },
+  claro:    { label:"Claro minimal",   icon:"☀️", accent:"#0284c7", accent2:"#7c3aed", shell:"#f8fafc", card:"#ffffff", soft:"#f1f5f9", text:"#0f172a" },
+};
+const APP_THEME_KEYS = Object.keys(APP_THEMES);
+
+const DX_COLOR_RULES = [
+  { key:"bipolar", label:"Bipolar", color:"#ec4899", keywords:["bipolar", "mania", "maní", "maniaco", "maníaco", "f31"] },
+  { key:"psicosis", label:"Psicosis", color:"#8b5cf6", keywords:["esquiz", "psicos", "psicótico", "psicotico", "f20", "f23", "f25"] },
+  { key:"depresion", label:"Depresión", color:"#3b82f6", keywords:["depres", "tdm", "f32", "f33"] },
+  { key:"ansiedad", label:"Ansiedad/TOC", color:"#22d3ee", keywords:["ansiedad", "toc", "pánico", "panico", "f41", "f42", "f40"] },
+  { key:"trauma", label:"Trauma/TEPT", color:"#f59e0b", keywords:["tept", "trauma", "estrés post", "estres post", "f43"] },
+  { key:"personalidad", label:"Personalidad", color:"#ef4444", keywords:["personalidad", "límite", "limite", "borderline", "f60"] },
+  { key:"sustancias", label:"Sustancias", color:"#f97316", keywords:["alcohol", "cannabis", "coca", "sustancia", "tabaco", "f10", "f12", "f19"] },
+  { key:"neurocognitivo", label:"Neurocognitivo", color:"#10b981", keywords:["demencia", "alzheimer", "neurocogn", "deterioro cogn", "f00"] },
+  { key:"tca", label:"TCA", color:"#fb7185", keywords:["anorexia", "bulimia", "tca", "conducta alimentaria", "f50"] },
+  { key:"tdah", label:"TDAH/Neurodesarrollo", color:"#84cc16", keywords:["tdah", "tea", "autismo", "neurodesarrollo", "f90", "f84"] },
+];
+
+const normalizeText = (value) => String(value || "")
+  .toLowerCase()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "");
+
 
 // ─── INSTITUCIONES / ESPACIOS DE TRABAJO ─────────────────────────────────
 const INSTITUTIONS = [
@@ -519,7 +547,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id,email,full_name,is_active")
+    .select("id,email,full_name,is_active,theme_preference")
     .eq("id", session.user.id)
     .single();
 
@@ -840,6 +868,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       label: profile.full_name || profile.email,
       role: defaultMembership?.role || "admin",
       email: profile.email,
+      themePreference: profile.theme_preference || null,
       memberships: membershipRows,
       membershipByInstitution: membershipRows.reduce((acc, m) => {
         acc[m.institution] = m;
@@ -1073,33 +1102,37 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
 
 
 // ─── CAMBIO DE VERSIÓN WEB / APP MÓVIL ───────────────────────────────────
-const ViewModeToggle = ({ mode, setMode }) => {
-  const isMobile = mode === "mobile";
+const ViewModeToggle = ({ mode, setMode, autoIsMobile }) => {
+  const effective = mode === "auto" ? (autoIsMobile ? "mobile" : "desktop") : mode;
+  const label = mode === "auto" ? `Auto ${autoIsMobile ? "móvil" : "web"}` : (effective === "mobile" ? "Móvil fijo" : "Web fija");
+  const next = mode === "auto" ? "desktop" : mode === "desktop" ? "mobile" : "auto";
   return (
     <button
-      onClick={() => setMode(isMobile ? "desktop" : "mobile")}
+      onClick={() => setMode(next)}
       className="fixed top-3 right-3 z-[80] inline-flex items-center gap-2 rounded-full border border-sky-500/60 bg-sky-600/95 px-3 py-2 text-xs font-bold text-white shadow-xl shadow-black/40 backdrop-blur hover:bg-sky-500 transition-colors"
-      aria-label={isMobile ? "Cambiar a versión web" : "Cambiar a versión móvil"}
-      title={isMobile ? "Cambiar a versión web" : "Cambiar a versión móvil"}
+      aria-label="Cambiar modo de visualización"
+      title="Auto detecta celular/escritorio. Clic: web fija → móvil fija → auto."
     >
-      <span className="text-sm">{isMobile ? "🖥️" : "📱"}</span>
-      <span>{isMobile ? "Ver web" : "Ver móvil"}</span>
+      <span className="text-sm">{effective === "mobile" ? "📱" : "🖥️"}</span>
+      <span>{label}</span>
     </button>
   );
 };
 
 
 const ThemeToggle = ({ themeMode, setThemeMode }) => {
-  const isLight = themeMode === "light";
+  const keys = APP_THEME_KEYS;
+  const cfg = APP_THEMES[themeMode] || APP_THEMES.nocturno;
+  const nextKey = keys[(keys.indexOf(themeMode) + 1) % keys.length] || keys[0];
   return (
     <button
-      onClick={() => setThemeMode(isLight ? "dark" : "light")}
-      className="fixed top-3 right-32 z-[80] inline-flex items-center gap-2 rounded-full border border-slate-500/50 bg-slate-900/90 px-3 py-2 text-xs font-bold text-slate-100 shadow-xl shadow-black/30 backdrop-blur hover:bg-slate-800 transition-colors light-control"
-      aria-label={isLight ? "Cambiar a modo oscuro" : "Cambiar a modo claro"}
-      title={isLight ? "Cambiar a modo oscuro" : "Cambiar a modo claro"}
+      onClick={() => setThemeMode(nextKey)}
+      className="fixed top-3 right-40 z-[80] inline-flex items-center gap-2 rounded-full border border-slate-500/50 bg-slate-900/90 px-3 py-2 text-xs font-bold text-slate-100 shadow-xl shadow-black/30 backdrop-blur hover:bg-slate-800 transition-colors light-control"
+      aria-label="Cambiar tema visual"
+      title="Cambia entre 5 temas visuales por usuario"
     >
-      <span className="text-sm">{isLight ? "🌙" : "☀️"}</span>
-      <span>{isLight ? "Oscuro" : "Claro"}</span>
+      <span className="text-sm">{cfg.icon}</span>
+      <span>{cfg.label}</span>
     </button>
   );
 };
@@ -2078,21 +2111,89 @@ const ClinicalProgramModal = ({ type, row, authSession, onClose, onSaved }) => {
 };
 
 // ─── PATIENT CARD ──────────────────────────────────────────────────────────
-const PatientCard = ({ patient, onClick }) => {
+const getPatientDxTags = (patient) => {
+  const dxParts = [patient?.dx_main, ...(Array.isArray(patient?.dx_secondary) ? patient.dx_secondary : [])];
+  const haystack = normalizeText(dxParts.join(" | "));
+  const found = DX_COLOR_RULES.filter(rule => rule.keywords.some(k => haystack.includes(normalizeText(k))));
+  if (!found.length && patient?.dx_main) return [{ key:"otro", label:"Otro dx", color:"#64748b" }];
+  return found.slice(0, 6);
+};
+
+const getDxRingStyle = (patient) => {
+  const tags = getPatientDxTags(patient);
+  if (!tags.length) return {};
+  const shadows = tags.slice(0, 6).map((tag, i) => `0 0 0 ${i * 3 + 1}px ${tag.color}${i === 0 ? "f2" : "9d"}`);
+  shadows.push(`0 0 22px ${tags[0].color}55`);
+  return {
+    borderColor: tags[0].color,
+    boxShadow: shadows.join(", "),
+  };
+};
+
+const patientSearchHaystack = (p) => {
+  const teamNames = [p.doctor, p.psychologist, p.ot, p.nurse, p.social]
+    .map(pid => getProf(pid)?.name || pid)
+    .join(" ");
+  const alerts = ALERTS.filter(a => a.patient === p.id).map(a => `${a.title} ${a.comment} ${a.priority} ${a.status}`).join(" ");
+  const meds = (p.meds || []).map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean).map(m => `${m.drug} ${m.dose} ${m.scheme} ${m.followup}`).join(" ");
+  const cloz = CLOZAPINE_TRACKING[p.id] ? "clozapina hemograma programa" : "";
+  const lai = DEPOT_TRACKING[p.id] ? "inyectable deposito lai depot" : "";
+  return normalizeText([
+    p.id, p.initials, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
+    p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
+    p.support, p.notes, p.next_control, teamNames, alerts, meds, cloz, lai,
+    ...getPatientDxTags(p).map(t => t.label),
+  ].join(" "));
+};
+
+const QUICK_PATIENT_FILTERS = [
+  { id:"all", label:"Todos", fn: () => true },
+  { id:"mis", label:"Mis pacientes", fn: p => ACTIVE_USER_ID === "admin" || [p.doctor,p.psychologist,p.ot,p.nurse,p.social].includes(ACTIVE_USER_ID) },
+  { id:"criticos", label:"Críticos/alto", fn: p => ["critico","alto"].includes(p.risk) || ["critico","alto"].includes(p.suicide_risk) },
+  { id:"clozapina", label:"Clozapina", fn: p => Boolean(CLOZAPINE_TRACKING[p.id]) || (p.meds || []).some(mid => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes("clozapina")) },
+  { id:"lai", label:"LAI/depot", fn: p => Boolean(DEPOT_TRACKING[p.id]) || (p.meds || []).some(mid => ["lai","depot","paliperidona","risperidona"].some(k => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes(k))) },
+  { id:"sin_control", label:"Sin control", fn: p => !p.next_control },
+  { id:"inasistentes", label:"Inasistentes", fn: p => p.status === "inasistente" },
+  { id:"alertas", label:"Con alertas", fn: p => (p.alerts || 0) > 0 || ALERTS.some(a => a.patient === p.id && a.status !== "resuelto") },
+];
+
+const PatientCard = ({ patient, onClick, compact = false }) => {
   const rc = getRiskCfg(patient.risk);
-  const sc = getStatusCfg(patient.status);
-  const doctor = getProf(patient.doctor);
-  const psych  = getProf(patient.psychologist);
+  const dxTags = getPatientDxTags(patient);
+  const ringStyle = getDxRingStyle(patient);
+  if (compact) {
+    return (
+      <div onClick={() => onClick(patient)} style={ringStyle}
+        className="rounded-2xl border bg-[#131920] px-3 py-2 cursor-pointer hover:bg-[#1a2332] transition-all">
+        <div className="flex items-center gap-3">
+          <div className="w-20 shrink-0">
+            <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
+            <div className="text-sm font-black text-white">{patient.initials}</div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-semibold text-slate-200">{patient.dx_main || "Sin diagnóstico principal"}</div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {dxTags.slice(0, 4).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-bold" style={{ borderColor:t.color, color:t.color }}>{t.label}</span>)}
+              {(patient.dx_secondary?.length || 0) > 4 && <span className="text-[9px] text-slate-500">+{patient.dx_secondary.length - 4}</span>}
+            </div>
+          </div>
+          <RiskBadge risk={patient.risk} small />
+          <StatusBadge status={patient.status} />
+          <div className="hidden w-28 text-right text-[10px] text-slate-500 sm:block">{patient.next_control || "Sin control"}</div>
+        </div>
+      </div>
+    );
+  }
   return (
-    <div onClick={() => onClick(patient)}
-      className={`bg-[#131920] border ${rc.border} rounded-xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-lg hover:shadow-black/30 group relative overflow-hidden`}>
+    <div onClick={() => onClick(patient)} style={ringStyle}
+      className={`bg-[#131920] border ${rc.border} rounded-xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-lg hover:shadow-black/30 group relative overflow-hidden`}> 
       <div className={`absolute inset-0 opacity-5 ${rc.bg}`}></div>
       <div className="relative">
         <div className="flex items-start justify-between mb-2.5">
           <div>
             <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
             <div className="text-white font-bold text-base leading-tight">{patient.initials}</div>
-            <div className="text-slate-400 text-xs">{patient.age} años · {patient.gender === "F" ? "F" : "M"}</div>
+            <div className="text-slate-400 text-xs">{patient.age} años · {patient.gender === "F" ? "F" : patient.gender === "M" ? "M" : "NR"}</div>
           </div>
           <div className="flex flex-col items-end gap-1">
             <RiskBadge risk={patient.risk} />
@@ -2100,6 +2201,12 @@ const PatientCard = ({ patient, onClick }) => {
           </div>
         </div>
         <div className="text-xs text-slate-300 font-medium mb-2 leading-snug">{patient.dx_main}</div>
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {dxTags.map(t => (
+            <span key={t.key} className="rounded-full border px-2 py-0.5 text-[10px] font-black" style={{ borderColor:t.color, color:t.color, backgroundColor:`${t.color}16` }}>{t.label}</span>
+          ))}
+          {(patient.dx_secondary?.length || 0) > 6 && <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">+{patient.dx_secondary.length - 6} dx</span>}
+        </div>
         <div className="flex items-center gap-2 mb-3">
           {patient.alerts > 0 && (
             <span className="flex items-center gap-1 text-red-400 text-[10px] font-semibold bg-red-900/20 px-1.5 py-0.5 rounded border border-red-800">
@@ -2519,6 +2626,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const [selected, setSelected] = useState(null);
   const [riskFilter, setRiskFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [quickFilter, setQuickFilter] = useState("all");
   const [viewMode, setViewMode] = useState("grid");
   const [formMode, setFormMode] = useState(null);
   const [editingPatient, setEditingPatient] = useState(null);
@@ -2529,12 +2637,15 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const closeForm = () => { setFormMode(null); setEditingPatient(null); };
 
   const filtered = useMemo(() => PATIENTS.filter(p => {
-    const q = search.toLowerCase();
-    const matchSearch = !q || p.initials.toLowerCase().includes(q) || p.id.toLowerCase().includes(q) || p.dx_main.toLowerCase().includes(q);
-    const matchRisk   = riskFilter === "all" || p.risk === riskFilter;
+    const q = normalizeText(search);
+    const quick = QUICK_PATIENT_FILTERS.find(f => f.id === quickFilter) || QUICK_PATIENT_FILTERS[0];
+    const matchSearch = !q || patientSearchHaystack(p).includes(q);
+    const matchRisk   = riskFilter === "all" || p.risk === riskFilter || p.suicide_risk === riskFilter || p.social_risk === riskFilter;
     const matchStatus = statusFilter === "all" || p.status === statusFilter;
-    return matchSearch && matchRisk && matchStatus;
-  }), [search, riskFilter, statusFilter, workspaceKey]);
+    return matchSearch && matchRisk && matchStatus && quick.fn(p);
+  }), [search, riskFilter, statusFilter, quickFilter, workspaceKey]);
+
+  const resultLabel = search ? `Búsqueda: “${search}”` : "Búsqueda avanzada disponible por diagnóstico, profesional, alerta, clozapina, LAI, estado o código.";
 
   return (
     <div>
@@ -2550,37 +2661,67 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
           onSaved={onDataChanged}
         />
       )}
-      {/* Filtros */}
-      <div className="flex flex-wrap items-center gap-3 mb-5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">Riesgo:</span>
-          {["all","critico","alto","medio","bajo","no_evaluado"].map(r => (
-            <button key={r} onClick={() => setRiskFilter(r)}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                ${riskFilter === r
-                  ? (r==="all" ? "bg-slate-600 border-slate-500 text-white" : `${getRiskCfg(r).bg} ${getRiskCfg(r).border} ${getRiskCfg(r).text}`)
-                  : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200"}`}>
-              {r === "all" ? "Todos" : getRiskCfg(r).label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 ml-auto">
+
+      <div className="mb-4 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-black text-slate-100">Explorador de pacientes</div>
+            <div className="text-[11px] text-slate-500">{resultLabel}</div>
+          </div>
           {USING_SUPABASE_DATA && (
             <button
               onClick={openCreate}
               disabled={!isAdmin}
               title={isAdmin ? "Crear paciente en Supabase" : "Solo administrador puede crear pacientes en esta versión"}
-              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-600/30 disabled:cursor-not-allowed disabled:opacity-50"
             >
               + Nuevo paciente
             </button>
           )}
-          <button onClick={() => setViewMode("grid")} className={`px-2 py-1 text-xs rounded border ${viewMode==="grid" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>▦ Tarjetas</button>
-          <button onClick={() => setViewMode("table")} className={`px-2 py-1 text-xs rounded border ${viewMode==="table" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>≡ Tabla</button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500">Filtro rápido:</span>
+          {QUICK_PATIENT_FILTERS.map(f => (
+            <button key={f.id} onClick={() => setQuickFilter(f.id)}
+              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${quickFilter === f.id ? "border-sky-500 bg-sky-600/20 text-sky-300" : "border-slate-700 bg-slate-900/40 text-slate-400 hover:text-slate-100"}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Riesgo:</span>
+            {[
+              ["all", "Todos"], ["critico", "Crítico"], ["alto", "Alto"], ["medio", "Medio"], ["bajo", "Bajo"], ["no_evaluado", "N/E"]
+            ].map(([r,l]) => (
+              <button key={r} onClick={() => setRiskFilter(r)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                  ${riskFilter === r
+                    ? (r==="all" ? "bg-slate-600 border-slate-500 text-white" : `${getRiskCfg(r).bg} ${getRiskCfg(r).border} ${getRiskCfg(r).text}`)
+                    : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200"}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Estado:</span>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+              <option value="all">Todos</option>
+              {Object.entries(STATUS_CONFIG).map(([k,c]) => <option key={k} value={k}>{c.label}</option>)}
+            </select>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setViewMode("grid")} className={`px-2 py-1 text-xs rounded border ${viewMode==="grid" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>▦ Tarjetas</button>
+            <button onClick={() => setViewMode("compact")} className={`px-2 py-1 text-xs rounded border ${viewMode==="compact" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>☰ Compacta</button>
+            <button onClick={() => setViewMode("table")} className={`px-2 py-1 text-xs rounded border ${viewMode==="table" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>≡ Tabla</button>
+          </div>
         </div>
       </div>
+
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""}</div>
+        <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""} · {PATIENTS.length} en esta institución</div>
         {USING_SUPABASE_DATA && (
           <div className="text-[10px] text-slate-500">
             {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes editar pacientes asignados. La reasignación de equipo queda para admin."}
@@ -2589,15 +2730,19 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
       </div>
 
       {viewMode === "grid" ? (
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-5 p-1">
           {filtered.map(p => <PatientCard key={p.id} patient={p} onClick={setSelected} />)}
+        </div>
+      ) : viewMode === "compact" ? (
+        <div className="space-y-2 p-1">
+          {filtered.map(p => <PatientCard key={p.id} patient={p} onClick={setSelected} compact />)}
         </div>
       ) : (
         <div className="bg-[#131920] rounded-xl border border-slate-800 overflow-hidden">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wider">
-                {["ID","Paciente","Edad","Diagnóstico","Riesgo","Estado","Próx. control","Responsable"].map(h => (
+                {["ID","Paciente","Edad","Diagnóstico","Familias dx","Riesgo","Estado","Próx. control","Responsable"].map(h => (
                   <th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>
                 ))}
               </tr>
@@ -2609,7 +2754,8 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
                   <td className="px-4 py-3 font-mono text-slate-500">{p.id}</td>
                   <td className="px-4 py-3 text-slate-200 font-semibold">{p.initials}</td>
                   <td className="px-4 py-3 text-slate-400">{p.age}</td>
-                  <td className="px-4 py-3 text-slate-300 max-w-[200px] truncate">{p.dx_main}</td>
+                  <td className="px-4 py-3 text-slate-300 max-w-[220px] truncate">{p.dx_main}</td>
+                  <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{getPatientDxTags(p).slice(0,3).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-black" style={{ color:t.color, borderColor:t.color }}>{t.label}</span>)}</div></td>
                   <td className="px-4 py-3"><RiskBadge risk={p.risk} small /></td>
                   <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
                   <td className="px-4 py-3 font-mono text-slate-400">{p.next_control || <span className="text-red-400">—</span>}</td>
@@ -4152,13 +4298,35 @@ const AuthGate = ({ children }) => {
 function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }) {
   const [page, setPage]     = useState("dashboard");
   const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState("desktop");
+  const [viewMode, setViewMode] = useState("auto");
+  const [autoIsMobile, setAutoIsMobile] = useState(() => typeof window !== "undefined" ? window.innerWidth <= 760 : false);
   const [activeInstitution, setActiveInstitutionRaw] = useState(authProfile?.institution || "centro_medico");
   const [activeUser, setActiveUser] = useState(authProfile?.appUserId || "admin");
-  const [themeMode, setThemeMode] = useState("dark");
+  const [themeMode, setThemeModeRaw] = useState(() => {
+    if (typeof window === "undefined") return "nocturno";
+    return localStorage.getItem("clincoord.theme") || "nocturno";
+  });
   const [dataVersion, setDataVersion] = useState(0);
   const [dbState, setDbState] = useState({ loading: Boolean(authLocked && isSupabaseConfigured), error: "", source: authLocked ? "supabase" : "demo" });
   const [runtimeAuthProfile, setRuntimeAuthProfile] = useState(authProfile);
+
+  useEffect(() => {
+    const onResize = () => setAutoIsMobile(window.innerWidth <= 760);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const setThemeMode = (nextTheme) => {
+    const safeTheme = APP_THEMES[nextTheme] ? nextTheme : "nocturno";
+    setThemeModeRaw(safeTheme);
+    try { localStorage.setItem("clincoord.theme", safeTheme); } catch {}
+    if (authSession?.user?.id && isSupabaseConfigured) {
+      supabase.from("profiles").update({ theme_preference: safeTheme }).eq("id", authSession.user.id).then(({ error }) => {
+        if (error) console.warn("No se pudo guardar el tema del usuario", error);
+      });
+    }
+  };
 
   useEffect(() => {
     if (!authProfile) return;
@@ -4177,6 +4345,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
+      if (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference]) setThemeModeRaw(dbAuthProfile.themePreference);
       setActiveInstitutionRaw(dbAuthProfile?.institution || "centro_medico");
       setActiveUser(getAppUserIdForWorkspace(dbAuthProfile?.institution || "centro_medico", dbAuthProfile?.appUserId || "admin"));
       setSearch("");
@@ -4225,7 +4394,8 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   };
   ACTIVE_INSTITUTION_ID = activeInstitution;
   ACTIVE_USER_ID = activeUser;
-  const isMobileView = viewMode === "mobile";
+  const isMobileView = viewMode === "auto" ? autoIsMobile : viewMode === "mobile";
+  const themeCfg = APP_THEMES[themeMode] || APP_THEMES.nocturno;
 
   const PAGE_TITLES = {
     dashboard:"Dashboard", pacientes:"Pacientes", profesionales:"Profesionales",
@@ -4253,11 +4423,17 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   );
 
   return (
-    <div className={`min-h-screen bg-[#080d13] text-slate-100 ${themeMode === "light" ? "light-theme" : "dark-theme"} ${isMobileView ? "mobile-shell" : "flex"}`}
-      style={{ fontFamily:"'DM Sans', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif" }}>
+    <div className={`min-h-screen bg-[#080d13] text-slate-100 theme-${themeMode} ${themeMode === "claro" ? "light-theme" : "dark-theme"} ${isMobileView ? "mobile-shell" : "flex"}`}
+      style={{ fontFamily:"'DM Sans', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif", "--cc-accent": themeCfg.accent, "--cc-accent-2": themeCfg.accent2, "--cc-shell": themeCfg.shell, "--cc-card": themeCfg.card, "--cc-soft": themeCfg.soft, "--cc-text": themeCfg.text }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400&display=swap');
         * { box-sizing: border-box; }
+        .theme-nocturno, .theme-clinico, .theme-bosque, .theme-ambar, .theme-claro { background: var(--cc-shell) !important; color: var(--cc-text) !important; }
+        .theme-nocturno [class*="bg-[#0d1117]"], .theme-nocturno [class*="bg-[#131920]"], .theme-clinico [class*="bg-[#0d1117]"], .theme-clinico [class*="bg-[#131920]"], .theme-bosque [class*="bg-[#0d1117]"], .theme-bosque [class*="bg-[#131920]"], .theme-ambar [class*="bg-[#0d1117]"], .theme-ambar [class*="bg-[#131920]"] { background-color: var(--cc-card) !important; }
+        .theme-claro [class*="bg-[#0d1117]"], .theme-claro [class*="bg-[#131920]"], .theme-claro [class*="bg-[#1a2332]"] { background-color: #ffffff !important; }
+        .theme-clinico .bg-sky-600, .theme-bosque .bg-sky-600, .theme-ambar .bg-sky-600, .theme-nocturno .bg-sky-600 { background-color: var(--cc-accent) !important; }
+        .theme-clinico .text-sky-400, .theme-bosque .text-sky-400, .theme-ambar .text-sky-400, .theme-nocturno .text-sky-400 { color: var(--cc-accent-2) !important; }
+        .theme-clinico .border-sky-600, .theme-bosque .border-sky-600, .theme-ambar .border-sky-600, .theme-nocturno .border-sky-600 { border-color: var(--cc-accent) !important; }
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: #0d1117; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
@@ -4333,7 +4509,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       `}</style>
 
       <ThemeToggle themeMode={themeMode} setThemeMode={setThemeMode} />
-      <ViewModeToggle mode={viewMode} setMode={setViewMode} />
+      <ViewModeToggle mode={viewMode} setMode={setViewMode} autoIsMobile={autoIsMobile} />
 
       {isMobileView ? (
         <>
