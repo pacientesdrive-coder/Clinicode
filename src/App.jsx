@@ -30,6 +30,33 @@ const APP_THEMES = {
 };
 const APP_THEME_KEYS = Object.keys(APP_THEMES);
 
+// ─── V2.1 · ARCHIVOS CLÍNICOS / STORAGE ─────────────────────────────────
+const CLINICAL_FILES_BUCKET = "clinical-files";
+const MAX_CLINICAL_FILE_SIZE = 20 * 1024 * 1024;
+const CLINICAL_FILE_CATEGORIES = [
+  { id:"hemograma", label:"Hemograma" },
+  { id:"epicrisis", label:"Epicrisis" },
+  { id:"informe_clinico", label:"Informe clínico" },
+  { id:"informe_social", label:"Informe social" },
+  { id:"consentimiento", label:"Consentimiento" },
+  { id:"imagen", label:"Imagen" },
+  { id:"otro", label:"Otro" },
+];
+const getFileCategoryLabel = (category) => CLINICAL_FILE_CATEGORIES.find(c => c.id === category)?.label || "Archivo";
+const formatBytes = (bytes) => {
+  const n = Number(bytes || 0);
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+};
+const sanitizeStorageFileName = (name) => String(name || "archivo")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-zA-Z0-9._-]+/g, "_")
+  .replace(/^_+|_+$/g, "")
+  .slice(0, 120) || "archivo";
+
 const DX_COLOR_RULES = [
   { key:"bipolar", label:"Bipolar", color:"#ec4899", keywords:["bipolar", "mania", "maní", "maniaco", "maníaco", "f31"] },
   { key:"psicosis", label:"Psicosis", color:"#8b5cf6", keywords:["esquiz", "psicos", "psicótico", "psicotico", "f20", "f23", "f25"] },
@@ -841,13 +868,22 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const fileRows = filesDb.map(file => ({
     id: file.id,
+    _dbId: file.id,
     institution: mapInstitutionFromDb(file.institution_id, institutionById),
+    institutionDbId: file.institution_id,
     name: file.file_name,
-    size: file.file_size_bytes ? `${Math.round(file.file_size_bytes / 1024)} KB` : "—",
+    originalName: file.original_file_name || file.file_name,
+    size: formatBytes(file.file_size_bytes),
+    sizeBytes: file.file_size_bytes || 0,
     date: (file.created_at || "").slice(0, 10),
+    uploadedAt: file.created_at,
     author: file.uploaded_by,
     patient: patientCodeByUuid.get(file.patient_id) || null,
+    patientDbId: file.patient_id,
     type: file.file_type || "archivo",
+    category: file.file_category || "otro",
+    description: file.description || "",
+    storagePath: file.storage_path || "",
   }));
 
   replaceCollection(RAW_PROFESSIONALS, professionalRows);
@@ -1253,6 +1289,7 @@ const getNavItems = () => ([
   { id:"clozapina",       label:"Programa Clozapina",      icon:"◆", badge: getClozapineRows().filter(r=>r.dias <= 7).length },
   { id:"inyectables",     label:"Inyectables Depósito",    icon:"◇", badge: getDepotRows().filter(r=>r.dias <= 7).length },
   { id:"trazabilidad",    label:"Trazabilidad",           icon:"◫" },
+  { id:"archivos",        label:"Archivos clínicos",      icon:"▣" },
   { id:"estadisticas",    label:"Estadísticas",           icon:"▦" },
   { id:"inbox",           label:"Inbox / Chat",           icon:"◻", badge: MESSAGES.filter(m=>!m.read).length },
   { id:"configuracion",   label:"Configuración",          icon:"⊙" },
@@ -2450,8 +2487,253 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
   );
 };
 
+
+// ─── V2.1 · ARCHIVOS CLÍNICOS PRIVADOS ───────────────────────────────────
+const downloadClinicalFile = async (file) => {
+  try {
+    if (!isSupabaseConfigured || !file?.storagePath) {
+      alert("Este archivo no tiene ruta de Storage disponible.");
+      return;
+    }
+    const { data, error } = await supabase.storage
+      .from(CLINICAL_FILES_BUCKET)
+      .createSignedUrl(file.storagePath, 60);
+    if (error) throw error;
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    alert(`No se pudo descargar/abrir el archivo: ${err.message || err}`);
+  }
+};
+
+const PatientFilesPanel = ({ patient, files = [], authSession, onDataChanged }) => {
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [category, setCategory] = useState("hemograma");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const fileInputRef = useRef(null);
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+
+  const canUpload = isSupabaseConfigured && authSession?.user?.id && patient?._dbId && getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.institutionDbId;
+
+  const handleUpload = async () => {
+    try {
+      setMessage("");
+      if (!selectedFile) throw new Error("Selecciona un archivo antes de subir.");
+      if (!canUpload) throw new Error("Falta sesión, paciente real de Supabase o institución activa.");
+      if (selectedFile.size > MAX_CLINICAL_FILE_SIZE) throw new Error(`Archivo demasiado grande. Máximo ${formatBytes(MAX_CLINICAL_FILE_SIZE)}.`);
+
+      setBusy(true);
+      const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+      const safeName = sanitizeStorageFileName(selectedFile.name);
+      const storagePath = `${membership.institutionDbId}/${patient._dbId}/${Date.now()}-${safeName}`;
+      const contentType = selectedFile.type || "application/octet-stream";
+
+      const uploadRes = await supabase.storage
+        .from(CLINICAL_FILES_BUCKET)
+        .upload(storagePath, selectedFile, { upsert: false, contentType });
+      if (uploadRes.error) throw uploadRes.error;
+
+      const insertRes = await supabase.from("files").insert({
+        institution_id: membership.institutionDbId,
+        patient_id: patient._dbId,
+        file_name: selectedFile.name,
+        original_file_name: selectedFile.name,
+        file_type: contentType,
+        file_category: category,
+        description: description?.trim() || null,
+        file_size_bytes: selectedFile.size,
+        storage_path: storagePath,
+        uploaded_by: authSession.user.id,
+      });
+      if (insertRes.error) throw insertRes.error;
+
+      await supabase.from("trace_events").insert({
+        institution_id: membership.institutionDbId,
+        patient_id: patient._dbId,
+        actor_profile_id: authSession.user.id,
+        actor_professional_id: membership.professionalId || null,
+        action: "Archivo clínico subido",
+        field: "files.storage_path",
+        previous_value: null,
+        next_value: selectedFile.name,
+        event_type: "archivo",
+      });
+
+      setSelectedFile(null);
+      setDescription("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setMessage("Archivo subido correctamente.");
+      if (onDataChanged) await onDataChanged();
+    } catch (err) {
+      setMessage(`Error: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (file) => {
+    if (!file?.storagePath || !file?._dbId) return;
+    if (!confirm(`¿Eliminar el archivo "${file.name}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      setBusy(true);
+      const storageRes = await supabase.storage.from(CLINICAL_FILES_BUCKET).remove([file.storagePath]);
+      if (storageRes.error) throw storageRes.error;
+      const dbRes = await supabase.from("files").delete().eq("id", file._dbId);
+      if (dbRes.error) throw dbRes.error;
+      setMessage("Archivo eliminado.");
+      if (onDataChanged) await onDataChanged();
+    } catch (err) {
+      setMessage(`No se pudo eliminar: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fileIcon = (file) => {
+    const t = `${file?.type || ""} ${file?.name || ""}`.toLowerCase();
+    if (t.includes("pdf")) return "PDF";
+    if (t.includes("image") || /\.(jpg|jpeg|png|webp)$/i.test(file?.name || "")) return "IMG";
+    if (t.includes("word") || t.includes("doc")) return "DOC";
+    return "ARC";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-700 bg-slate-900/30 p-4">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-slate-100">Subir archivo clínico</div>
+            <div className="text-[11px] text-slate-500">Storage privado por institución y paciente · PDF/JPG/PNG/DOCX · Máx. {formatBytes(MAX_CLINICAL_FILE_SIZE)}</div>
+          </div>
+          <span className="rounded-full border border-sky-700 bg-sky-900/20 px-2 py-0.5 text-[10px] font-bold text-sky-300">v2.1</span>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+              onChange={e => setSelectedFile(e.target.files?.[0] || null)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-sky-600 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-white"
+            />
+            {selectedFile && <div className="mt-1 text-[10px] text-slate-500">Seleccionado: {selectedFile.name} · {formatBytes(selectedFile.size)}</div>}
+          </div>
+          <select value={category} onChange={e => setCategory(e.target.value)} className="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+            {CLINICAL_FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        </div>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="Descripción breve opcional: hemograma mayo, epicrisis alta, consentimiento, etc."
+          className="mt-3 min-h-[70px] w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 placeholder-slate-600 outline-none focus:border-sky-500"
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <button
+            onClick={handleUpload}
+            disabled={busy || !canUpload || !selectedFile}
+            className="rounded-full border border-sky-600 bg-sky-600/25 px-4 py-2 text-xs font-black text-sky-200 hover:bg-sky-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Subiendo…" : "+ Subir archivo"}
+          </button>
+          {message && <div className={`text-[11px] ${message.startsWith("Error") || message.startsWith("No se") ? "text-red-400" : "text-emerald-400"}`}>{message}</div>}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {files.length === 0 && <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 text-sm text-slate-500">Sin archivos adjuntos.</div>}
+        {files.map(f => (
+          <div key={f.id} className="flex items-center gap-3 rounded-xl border border-slate-700 bg-[#131920] p-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-red-700 bg-red-900/30 text-[10px] font-black text-red-300">{fileIcon(f)}</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="truncate text-sm font-semibold text-slate-100">{f.name}</div>
+                <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] font-bold text-slate-400">{getFileCategoryLabel(f.category)}</span>
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500">{f.size} · {f.date} · {getProf(f.author)?.name || f.author || "sin autor"}</div>
+              {f.description && <div className="mt-1 text-[11px] text-slate-400">{f.description}</div>}
+            </div>
+            <button onClick={() => downloadClinicalFile(f)} className="rounded-full border border-sky-700 px-3 py-1.5 text-[10px] font-bold text-sky-300 hover:bg-sky-900/30">Abrir</button>
+            {isAdmin && <button onClick={() => handleDelete(f)} disabled={busy} className="rounded-full border border-red-800 px-3 py-1.5 text-[10px] font-bold text-red-300 hover:bg-red-900/20 disabled:opacity-50">Eliminar</button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ClinicalFilesView = ({ authSession, onDataChanged }) => {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const rows = useMemo(() => {
+    const q = normalizeText(query);
+    return FILES.filter(f => {
+      const patient = getPatientByCode(f.patient);
+      const hay = normalizeText(`${f.name} ${f.description} ${f.patient} ${patient?.initials} ${patient?.dx_main} ${getFileCategoryLabel(f.category)} ${getProf(f.author)?.name}`);
+      return (category === "all" || f.category === category) && (!q || hay.includes(q));
+    }).sort((a,b) => String(b.uploadedAt || b.date).localeCompare(String(a.uploadedAt || a.date)));
+  }, [query, category, ACTIVE_INSTITUTION_ID, ACTIVE_USER_ID]);
+
+  const exportRows = rows.map(f => ({
+    paciente: f.patient,
+    archivo: f.name,
+    categoria: getFileCategoryLabel(f.category),
+    fecha: f.date,
+    tamano: f.size,
+    descripcion: f.description,
+    autor: getProf(f.author)?.name || f.author || "",
+  }));
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-black text-slate-100">Archivos clínicos</div>
+            <div className="text-xs text-slate-500">Repositorio privado de documentos asociados a pacientes visibles en la institución activa.</div>
+          </div>
+          <ExportButton rows={exportRows} filename={`archivos_clinicos_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} label="Exportar índice" />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_220px]">
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar por paciente, archivo, diagnóstico, categoría o autor…" className="rounded-2xl border border-slate-700 bg-slate-950/50 px-4 py-3 text-sm text-slate-100 placeholder-slate-600 outline-none focus:border-sky-500" />
+          <select value={category} onChange={e => setCategory(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-950/50 px-4 py-3 text-sm font-bold text-slate-300 outline-none focus:border-sky-500">
+            <option value="all">Todas las categorías</option>
+            {CLINICAL_FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {rows.length === 0 && <div className="rounded-2xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay archivos que coincidan con la búsqueda.</div>}
+        {rows.map(f => {
+          const patient = getPatientByCode(f.patient);
+          return (
+            <div key={f.id} className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-sky-700 bg-sky-900/20 text-[10px] font-black text-sky-300">{String(getFileCategoryLabel(f.category)).slice(0,3).toUpperCase()}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold text-slate-100">{f.name}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">{f.patient} · {patient?.initials || "—"} · {f.size} · {f.date}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">{getFileCategoryLabel(f.category)}</span>
+                    {patient?.risk && <RiskBadge risk={patient.risk} small />}
+                  </div>
+                  {f.description && <p className="mt-2 text-xs text-slate-400">{f.description}</p>}
+                </div>
+                <button onClick={() => downloadClinicalFile(f)} className="rounded-full border border-sky-700 px-3 py-1.5 text-[10px] font-bold text-sky-300 hover:bg-sky-900/30">Abrir</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <Disclaimer />
+    </div>
+  );
+};
+
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
-const PatientDetail = ({ patient, onClose, onEdit }) => {
+const PatientDetail = ({ patient, onClose, onEdit, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
   const rc = getRiskCfg(patient.risk);
   const patAlerts = ALERTS.filter(a => a.patient === patient.id);
@@ -2657,21 +2939,12 @@ const PatientDetail = ({ patient, onClose, onEdit }) => {
             </div>
           )}
           {tab === "archivos" && (
-            <div className="space-y-2">
-              {patFiles.length === 0 && <div className="text-slate-500 text-sm">Sin archivos adjuntos.</div>}
-              {patFiles.map(f => (
-                <div key={f.id} className="bg-[#131920] rounded-lg p-3 border border-slate-700 flex items-center gap-3">
-                  <div className="w-8 h-8 bg-red-900/40 border border-red-700 rounded flex items-center justify-center text-red-400 text-xs font-bold">PDF</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-200 font-medium truncate">{f.name}</div>
-                    <div className="text-[10px] text-slate-500">{f.size} · {f.date} · {getProf(f.author)?.name}</div>
-                  </div>
-                </div>
-              ))}
-              <div className="border-2 border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-500 text-xs hover:border-sky-700 cursor-pointer transition-colors">
-                + Adjuntar archivo (máx. 5 MB · PDF, JPG, PNG)
-              </div>
-            </div>
+            <PatientFilesPanel
+              patient={patient}
+              files={patFiles}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
           )}
           {tab === "historial" && (
             <div className="space-y-2">
@@ -2867,7 +3140,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
 
   return (
     <div>
-      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} />}
+      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} authSession={authSession} onDataChanged={onDataChanged} />}
       {formMode && (
         <PatientFormModal
           mode={formMode}
