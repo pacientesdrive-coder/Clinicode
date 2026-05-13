@@ -976,6 +976,221 @@ const ExportButton = ({ rows, filename, label = "Exportar para Excel" }) => (
   </button>
 );
 
+
+// ─── V2.0 · ACCIONES Y ALERTAS CLÍNICAS AUTOMÁTICAS ──────────────────────
+const OPEN_ALERT_STATUSES = new Set(["pendiente", "en_curso"]);
+const ACTION_PRIORITY_WEIGHT = { critico: 4, alto: 3, medio: 2, bajo: 1, no_evaluado: 0 };
+const isOpenAlert = (status) => OPEN_ALERT_STATUSES.has(status);
+const getPatientByCode = (code) => PATIENTS.find(p => p.id === code);
+const getPrimaryResponsible = (patient) => patient?.doctor || patient?.nurse || patient?.psychologist || patient?.social || patient?.ot || "";
+const normalizeDueDays = (date) => Number.isFinite(daysUntil(date)) ? daysUntil(date) : 9999;
+const clinicalActionTone = (priority) => {
+  if (priority === "critico") return "border-red-600 bg-red-950/30 text-red-300";
+  if (priority === "alto") return "border-orange-600 bg-orange-950/30 text-orange-300";
+  if (priority === "medio") return "border-yellow-600 bg-yellow-950/30 text-yellow-300";
+  return "border-slate-700 bg-slate-900/40 text-slate-300";
+};
+const clinicalActionDot = (priority) => {
+  if (priority === "critico") return "bg-red-500";
+  if (priority === "alto") return "bg-orange-500";
+  if (priority === "medio") return "bg-yellow-400";
+  return "bg-slate-500";
+};
+const getAutomaticClinicalActions = () => {
+  const actions = [];
+  const existingOpenAlerts = ALERTS.filter(a => isOpenAlert(a.status));
+
+  getClozapineRows().forEach(row => {
+    if (row.statusValue === "suspendido") return;
+    if (row.dias <= 7) {
+      actions.push({
+        id:`clozapina-${row.paciente}`,
+        source:"clozapina",
+        icon:"◆",
+        title: row.dias < 0 ? "Hemograma de clozapina vencido" : "Hemograma de clozapina próximo",
+        patient: row.paciente,
+        initials: row.iniciales,
+        priority: row.dias < 0 ? "alto" : "medio",
+        due: row.proximoHemograma,
+        dueDays: row.dias,
+        responsibleId: row.responsibleId,
+        responsibleName: row.responsable,
+        detail:`Próximo hemograma ${row.proximoHemograma || "sin fecha"}. Último: ${row.ultimoHemograma || "—"}. Neutrófilos/RAN: ${row.neutrofilos || "—"}.`,
+        recommendation:"Coordinar hemograma, revisar resultados y documentar continuidad del programa.",
+      });
+    }
+  });
+
+  getDepotRows().forEach(row => {
+    if (row.statusValue === "suspendido") return;
+    if (row.dias <= 7) {
+      actions.push({
+        id:`lai-${row.paciente}-${row.farmaco}`,
+        source:"lai",
+        icon:"◇",
+        title: row.dias < 0 ? "Inyectable de depósito atrasado" : "Inyectable de depósito próximo",
+        patient: row.paciente,
+        initials: row.iniciales,
+        priority: row.dias < 0 ? "alto" : "medio",
+        due: row.proximaAdministracion,
+        dueDays: row.dias,
+        responsibleId: row.responsibleId,
+        responsibleName: row.responsable,
+        detail:`${row.farmaco} ${row.dosis || ""}. Próxima administración: ${row.proximaAdministracion || "sin fecha"}. Sitio: ${row.sitio || "—"}.`,
+        recommendation:"Contactar paciente/equipo, registrar administración o reagendar dosis.",
+      });
+    }
+  });
+
+  PATIENTS.forEach(patient => {
+    if (patient.status === "alta" || patient.status === "derivado") return;
+    const resp = getPrimaryResponsible(patient);
+    const noControl = !patient.next_control;
+    const controlDays = patient.next_control ? normalizeDueDays(patient.next_control) : null;
+    if (noControl || controlDays < 0) {
+      actions.push({
+        id:`control-${patient.id}`,
+        source:"control",
+        icon:"⏱",
+        title: noControl ? "Paciente sin próximo control" : "Próximo control vencido",
+        patient: patient.id,
+        initials: patient.initials,
+        priority: patient.risk === "critico" || patient.risk === "alto" ? "alto" : "medio",
+        due: patient.next_control || DEMO_TODAY,
+        dueDays: noControl ? -999 : controlDays,
+        responsibleId: resp,
+        responsibleName: getProf(resp)?.name || "Sin responsable claro",
+        detail: noControl ? "No registra fecha de próximo control." : `Control programado para ${patient.next_control}.`,
+        recommendation:"Agendar control, confirmar contacto y actualizar fecha en ficha de coordinación.",
+      });
+    }
+
+    if (patient.status === "inasistente") {
+      const daysNoContact = patient.last_contact ? Math.abs(normalizeDueDays(patient.last_contact)) : null;
+      actions.push({
+        id:`inasistente-${patient.id}`,
+        source:"inasistencia",
+        icon:"△",
+        title:"Paciente inasistente",
+        patient: patient.id,
+        initials: patient.initials,
+        priority: patient.risk === "critico" || patient.suicide_risk === "alto" ? "critico" : "alto",
+        due: DEMO_TODAY,
+        dueDays: 0,
+        responsibleId: resp,
+        responsibleName: getProf(resp)?.name || "Sin responsable claro",
+        detail:`Último contacto: ${patient.last_contact || "sin registro"}${daysNoContact ? ` · ${daysNoContact} días aprox.` : ""}. Riesgo suicida: ${getRiskCfg(patient.suicide_risk).label}.`,
+        recommendation:"Intentar contacto, activar red de apoyo y escalar protocolo si corresponde.",
+      });
+    }
+
+    if (patient.risk === "critico") {
+      const lastContactDays = patient.last_contact ? Math.abs(normalizeDueDays(patient.last_contact)) : null;
+      if (!patient.last_contact || lastContactDays >= 3) {
+        actions.push({
+          id:`riesgo-critico-${patient.id}`,
+          source:"riesgo",
+          icon:"⚠",
+          title:"Riesgo crítico sin contacto reciente",
+          patient: patient.id,
+          initials: patient.initials,
+          priority:"critico",
+          due: DEMO_TODAY,
+          dueDays: 0,
+          responsibleId: resp,
+          responsibleName: getProf(resp)?.name || "Sin responsable claro",
+          detail:`Riesgo global crítico. Último contacto: ${patient.last_contact || "sin registro"}.`,
+          recommendation:"Revisar caso hoy, documentar plan de seguridad y responsables.",
+        });
+      }
+    }
+  });
+
+  existingOpenAlerts
+    .filter(a => a.priority === "critico" || (a.due && normalizeDueDays(a.due) <= 0))
+    .forEach(a => {
+      const patient = getPatientByCode(a.patient);
+      actions.push({
+        id:`alerta-${a.id}`,
+        source:"alerta",
+        icon:"●",
+        title:a.title,
+        patient:a.patient,
+        initials:patient?.initials || a.patient || "—",
+        priority:a.priority || "medio",
+        due:a.due || DEMO_TODAY,
+        dueDays:a.due ? normalizeDueDays(a.due) : 0,
+        responsibleId:a.responsible,
+        responsibleName:getProf(a.responsible)?.name || "Sin responsable claro",
+        detail:a.comment || "Alerta abierta.",
+        recommendation:"Resolver, actualizar estado o documentar curso de acción.",
+      });
+    });
+
+  const dedup = new Map();
+  actions.forEach(action => {
+    const key = `${action.source}-${action.patient}-${action.title}`;
+    const existing = dedup.get(key);
+    if (!existing || ACTION_PRIORITY_WEIGHT[action.priority] > ACTION_PRIORITY_WEIGHT[existing.priority]) dedup.set(key, action);
+  });
+  return Array.from(dedup.values()).sort((a, b) => {
+    const pa = ACTION_PRIORITY_WEIGHT[b.priority] - ACTION_PRIORITY_WEIGHT[a.priority];
+    if (pa !== 0) return pa;
+    return (a.dueDays ?? 9999) - (b.dueDays ?? 9999);
+  });
+};
+
+const ClinicalActionPanel = ({ setPage, compact = false, maxItems = 6, actionsOverride = null }) => {
+  const actions = actionsOverride || getAutomaticClinicalActions();
+  const today = actions.filter(a => a.priority === "critico" || a.dueDays <= 0).length;
+  const week = actions.filter(a => a.dueDays > 0 && a.dueDays <= 7).length;
+  const items = compact ? actions.slice(0, maxItems) : actions;
+  return (
+    <div className="rounded-2xl border border-red-900/50 bg-red-950/10 p-4 shadow-xl shadow-black/20">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-black text-slate-100">Acciones clínicas automáticas</div>
+          <div className="text-xs text-slate-500">V2.0 calcula prioridades desde riesgo, controles, clozapina, inyectables e inasistencias.</div>
+        </div>
+        <div className="flex gap-2">
+          <span className="rounded-full border border-red-700 bg-red-900/20 px-2.5 py-1 text-[10px] font-black text-red-300">Hoy: {today}</span>
+          <span className="rounded-full border border-yellow-700 bg-yellow-900/20 px-2.5 py-1 text-[10px] font-black text-yellow-300">7 días: {week}</span>
+          {compact && <button onClick={() => setPage?.("acciones")} className="rounded-full border border-sky-700 bg-sky-900/20 px-2.5 py-1 text-[10px] font-black text-sky-300">Ver tablero →</button>}
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-emerald-800 bg-emerald-950/20 p-3 text-sm text-emerald-300">Sin acciones automáticas urgentes para este contexto.</div>
+      ) : (
+        <div className="space-y-2">
+          {items.map(action => (
+            <div key={action.id} className={`rounded-xl border p-3 ${clinicalActionTone(action.priority)}`}>
+              <div className="flex items-start gap-3">
+                <span className={`mt-1 h-2.5 w-2.5 rounded-full ${clinicalActionDot(action.priority)} shadow-lg`}></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-black text-slate-100">{action.icon} {action.title}</span>
+                    <span className="rounded-full border border-slate-700 bg-slate-900/40 px-2 py-0.5 text-[10px] font-black text-slate-400">{action.patient || "sin paciente"}</span>
+                    <RiskBadge risk={action.priority} small />
+                    {Number.isFinite(action.dueDays) && <span className="text-[10px] font-mono text-slate-500">{action.dueDays < 0 ? `${Math.abs(action.dueDays)} días atrasado` : action.dueDays === 0 ? "hoy" : `${action.dueDays} días`}</span>}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">{action.detail}</div>
+                  {!compact && <div className="mt-1 text-xs text-slate-300"><span className="font-bold text-slate-200">Sugerencia:</span> {action.recommendation}</div>}
+                  <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-500">
+                    <ProfAvatar id={action.responsibleId} size="sm" />
+                    <span>{action.responsibleName || "Sin responsable claro"}</span>
+                    <span>·</span>
+                    <span>{action.source}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 const getProf = (id) => PROFESSIONALS.find(p => p.id === id);
 const getRiskCfg = (r) => RISK_CONFIG[r] || RISK_CONFIG.no_evaluado;
@@ -1031,6 +1246,7 @@ const Disclaimer = () => (
 const getNavItems = () => ([
   { id:"dashboard",       label:"Dashboard",              icon:"⬡" },
   { id:"pacientes",       label:"Pacientes",              icon:"◉" },
+  { id:"acciones",        label:"Acciones clínicas",      icon:"⚕", badge: getAutomaticClinicalActions().filter(a => a.priority === "critico" || a.dueDays <= 0).length },
   { id:"profesionales",   label:"Profesionales",          icon:"◈" },
   { id:"alertas",         label:"Alertas y Controles",    icon:"△", badge: ALERTS.filter(a=>a.status==="pendiente").length },
   { id:"farmacoterapia",  label:"Farmacoterapia",         icon:"⬡" },
@@ -1095,7 +1311,7 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v1.1-MVP</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.0-AUTO</div>
     </div>
   </header>
 );
@@ -2547,6 +2763,8 @@ const Dashboard = ({ setPage }) => {
         ))}
       </div>
 
+      <ClinicalActionPanel setPage={setPage} compact maxItems={5} />
+
       <div className="grid grid-cols-2 gap-6">
         {/* Distribución de riesgo */}
         <div className="bg-[#131920] rounded-xl p-5 border border-slate-800">
@@ -2834,6 +3052,94 @@ const ProfesionalesView = () => (
     </div>
   </div>
 );
+
+
+// ─── ACCIONES CLÍNICAS AUTOMÁTICAS ───────────────────────────────────────
+const AccionesClinicasView = ({ authSession, onDataChanged }) => {
+  const [filter, setFilter] = useState("all");
+  const [syncing, setSyncing] = useState(false);
+  const [message, setMessage] = useState("");
+  const actions = getAutomaticClinicalActions();
+  const filtered = actions.filter(action => filter === "all" || action.priority === filter || action.source === filter || (filter === "hoy" && (action.priority === "critico" || action.dueDays <= 0)) || (filter === "semana" && action.dueDays > 0 && action.dueDays <= 7));
+  const exportRows = actions.map(a => ({
+    prioridad: getRiskCfg(a.priority).label,
+    fuente: a.source,
+    paciente: a.patient,
+    iniciales: a.initials,
+    titulo: a.title,
+    fecha_limite: a.due,
+    dias: a.dueDays,
+    responsable: a.responsibleName,
+    detalle: a.detail,
+    sugerencia: a.recommendation,
+  }));
+
+  const syncAutomaticAlerts = async () => {
+    setMessage("");
+    if (!isSupabaseConfigured || !authSession?.user?.id) {
+      setMessage("Modo demo: las acciones se calculan en pantalla, pero no se guardan como alertas.");
+      return;
+    }
+    const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+    if (!membership?.institutionDbId) {
+      setMessage("No se encontró la institución real activa para sincronizar alertas.");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.rpc("clincoord_generate_automatic_alerts", { p_institution_id: membership.institutionDbId });
+      if (error) throw error;
+      const result = Array.isArray(data) ? data[0] : data;
+      setMessage(`Alertas automáticas sincronizadas. Insertadas: ${result?.inserted_count ?? "?"}; actualizadas: ${result?.updated_count ?? "?"}.`);
+      await onDataChanged?.();
+    } catch (error) {
+      console.error(error);
+      setMessage(error?.message || "No se pudieron sincronizar alertas automáticas.");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-slate-800 bg-[#131920] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-black text-slate-100">Tablero de acciones clínicas</div>
+            <div className="mt-1 max-w-2xl text-sm text-slate-400">Prioriza automáticamente casos por vencimientos de clozapina, inyectables de depósito, controles, inasistencias y riesgo crítico. Usa esto como apoyo de coordinación, no como reemplazo de juicio clínico.</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={syncAutomaticAlerts} disabled={syncing} className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-2 text-xs font-black text-sky-300 hover:bg-sky-900/50 disabled:opacity-50">{syncing ? "Sincronizando…" : "Generar/actualizar alertas"}</button>
+            <ExportButton rows={exportRows} filename="acciones_clinicas_automaticas" label="Exportar acciones" />
+          </div>
+        </div>
+        {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.includes("No se") ? "border-red-800 bg-red-950/30 text-red-200" : "border-emerald-800 bg-emerald-950/20 text-emerald-300"}`}>{message}</div>}
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          ["Acciones totales", actions.length, "text-sky-400 border-sky-800"],
+          ["Para hoy / vencidas", actions.filter(a=>a.priority === "critico" || a.dueDays <= 0).length, "text-red-400 border-red-800"],
+          ["Próximos 7 días", actions.filter(a=>a.dueDays > 0 && a.dueDays <= 7).length, "text-yellow-400 border-yellow-800"],
+          ["Críticas", actions.filter(a=>a.priority === "critico").length, "text-red-400 border-red-700"],
+        ].map(([l,v,c]) => (
+          <div key={l} className={`rounded-xl border bg-[#131920] p-4 ${c.split(" ")[1]}`}>
+            <div className={`text-2xl font-black ${c.split(" ")[0]}`}>{v}</div>
+            <div className="mt-1 text-xs text-slate-400">{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {["all","hoy","semana","critico","alto","medio","clozapina","lai","control","inasistencia","riesgo","alerta"].map(f => (
+          <button key={f} onClick={()=>setFilter(f)} className={`rounded-full border px-2.5 py-1 text-xs font-bold transition-colors ${filter===f ? "border-sky-600 bg-sky-600/20 text-sky-300" : "border-slate-700 text-slate-500 hover:text-slate-300"}`}>{f === "all" ? "Todas" : f}</button>
+        ))}
+      </div>
+
+      <ClinicalActionPanel setPage={null} compact={false} maxItems={filtered.length} actionsOverride={filtered} />
+    </div>
+  );
+};
 
 // ─── ALERTAS ──────────────────────────────────────────────────────────────
 const AlertasView = () => {
@@ -4398,7 +4704,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   const themeCfg = APP_THEMES[themeMode] || APP_THEMES.nocturno;
 
   const PAGE_TITLES = {
-    dashboard:"Dashboard", pacientes:"Pacientes", profesionales:"Profesionales",
+    dashboard:"Dashboard", acciones:"Acciones clínicas", pacientes:"Pacientes", profesionales:"Profesionales",
     alertas:"Alertas y Controles", farmacoterapia:"Farmacoterapia / Tratamientos",
     clozapina:"Programa Clozapina", inyectables:"Inyectables de Depósito",
     trazabilidad:"Trazabilidad / Auditoría", estadisticas:"Estadísticas",
@@ -4409,6 +4715,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     <div key={`${activeInstitution}-${page}-${dataVersion}`} className="space-y-5">
       <InstitutionSummary activeInstitution={activeInstitution} />
       {page === "dashboard"      && <Dashboard setPage={setPage} />}
+      {page === "acciones"       && <AccionesClinicasView authSession={authSession} onDataChanged={refreshWorkspaceData} />}
       {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} activeInstitution={activeInstitution} authSession={authSession} authProfile={effectiveAuthProfile} onDataChanged={refreshWorkspaceData} />}
       {page === "profesionales"  && <ProfesionalesView />}
       {page === "alertas"        && <AlertasView />}
