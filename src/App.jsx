@@ -3646,6 +3646,352 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
   );
 };
 
+
+const ROLE_OPTIONS_ADMIN = [
+  ["admin", "Administrador institucional"],
+  ["psiquiatra_jefe", "Psiquiatra jefe"],
+  ["psiquiatra", "Psiquiatra"],
+  ["medico_general", "Médico general"],
+  ["psicologo", "Psicólogo/a"],
+  ["enfermero", "Enfermero/a"],
+  ["tens", "TENS"],
+  ["terapeuta_ocupacional", "Terapeuta ocupacional"],
+  ["trabajador_social", "Trabajador/a social"],
+  ["solo_lectura", "Solo lectura"],
+];
+const ROLE_LABEL_ADMIN = Object.fromEntries(ROLE_OPTIONS_ADMIN);
+
+const INSTITUTION_KIND_OPTIONS = [
+  ["centro_medico", "Centro médico"],
+  ["hospital", "Hospital"],
+  ["clinica", "Clínica"],
+  ["cosam", "COSAM / red pública"],
+  ["consulta_privada", "Consulta privada"],
+  ["otro", "Otro"],
+];
+const KIND_LABELS = Object.fromEntries(INSTITUTION_KIND_OPTIONS);
+
+const InstitutionsAdminPanel = ({ onDataChanged }) => {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [items, setItems] = useState([]);
+  const [form, setForm] = useState({ id:"", name:"", slug:"", kind:"centro_medico", description:"", isActive:true });
+
+  const slugify = (value) => (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+
+  const loadInstitutionsAdmin = async () => {
+    if (!isSupabaseConfigured) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { data, error } = await supabase
+        .from("institutions")
+        .select("id,slug,name,kind,description,is_active,created_at")
+        .order("name");
+      if (error) throw error;
+      setItems(data || []);
+    } catch (error) {
+      setMessage(error?.message || "No se pudieron cargar instituciones.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadInstitutionsAdmin(); }, []);
+
+  const resetForm = () => setForm({ id:"", name:"", slug:"", kind:"centro_medico", description:"", isActive:true });
+
+  const editInstitution = (item) => {
+    setForm({
+      id: item.id,
+      name: item.name || "",
+      slug: item.slug || "",
+      kind: item.kind || "otro",
+      description: item.description || "",
+      isActive: item.is_active !== false,
+    });
+  };
+
+  const saveInstitution = async (e) => {
+    e?.preventDefault?.();
+    setLoading(true);
+    setMessage("");
+    try {
+      const name = form.name.trim();
+      const slug = slugify(form.slug || form.name);
+      if (!name) throw new Error("Escribe el nombre de la institución.");
+      if (!slug) throw new Error("No se pudo generar un slug válido.");
+      const { data, error } = await supabase.rpc("clincoord_upsert_institution_v1", {
+        p_institution_id: form.id || null,
+        p_name: name,
+        p_slug: slug,
+        p_kind: form.kind,
+        p_description: form.description?.trim() || null,
+        p_is_active: Boolean(form.isActive),
+      });
+      if (error) throw error;
+      setMessage(form.id ? "Institución actualizada." : "Institución creada.");
+      resetForm();
+      await loadInstitutionsAdmin();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar la institución.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Instituciones</div>
+          <div className="text-xs text-slate-500 mt-1">Crea y administra centros, hospitales, clínicas u otros espacios. Solo superadmin puede crear nuevas instituciones.</div>
+        </div>
+        <button onClick={loadInstitutionsAdmin} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+      </div>
+
+      <form onSubmit={saveInstitution} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre de institución</label>
+            <input value={form.name} onChange={e => setForm({...form, name:e.target.value, slug: form.id ? form.slug : slugify(e.target.value)})} placeholder="Ej: Clínica Norte" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Slug interno</label>
+            <input value={form.slug} onChange={e => setForm({...form, slug:slugify(e.target.value)})} placeholder="clinica-norte" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Tipo</label>
+            <select value={form.kind} onChange={e => setForm({...form, kind:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {INSTITUTION_KIND_OPTIONS.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
+            <select value={form.isActive ? "true" : "false"} onChange={e => setForm({...form, isActive:e.target.value === "true"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              <option value="true">Activa</option>
+              <option value="false">Inactiva</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Descripción</label>
+            <textarea value={form.description} onChange={e => setForm({...form, description:e.target.value})} rows={2} placeholder="Descripción breve del espacio institucional" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear institución"}</button>
+        </div>
+      </form>
+
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full min-w-[780px] text-xs">
+          <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
+            <tr><th className="px-3 py-2 text-left">Institución</th><th className="px-3 py-2 text-left">Tipo</th><th className="px-3 py-2 text-left">Slug</th><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-right">Acciones</th></tr>
+          </thead>
+          <tbody>
+            {items.map(item => (
+              <tr key={item.id} className="border-t border-slate-800">
+                <td className="px-3 py-2"><div className="font-semibold text-slate-200">{item.name}</div><div className="text-slate-500">{item.description || "Sin descripción"}</div></td>
+                <td className="px-3 py-2 text-slate-300">{KIND_LABELS[item.kind] || item.kind || "—"}</td>
+                <td className="px-3 py-2 font-mono text-slate-500">{item.slug}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${item.is_active !== false ? "border-emerald-700 text-emerald-400" : "border-red-700 text-red-400"}`}>{item.is_active !== false ? "Activa" : "Inactiva"}</span></td>
+                <td className="px-3 py-2 text-right"><button onClick={() => editInstitution(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button></td>
+              </tr>
+            ))}
+            {!items.length && <tr><td colSpan="5" className="px-3 py-6 text-center text-slate-500">Sin instituciones visibles.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ProfessionalsAdminPanel = ({ activeInstitution, onDataChanged }) => {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [institutions, setInstitutions] = useState([]);
+  const [items, setItems] = useState([]);
+  const defaultInstitutionId = getMembershipForWorkspace(activeInstitution)?.institutionDbId || "";
+  const [filterInstitutionId, setFilterInstitutionId] = useState(defaultInstitutionId);
+  const [form, setForm] = useState({ id:"", institutionId: defaultInstitutionId, fullName:"", role:"psiquiatra", specialty:"", email:"", initials:"", isActive:true });
+
+  const makeInitials = (name) => (name || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join("") || "PR";
+
+  const loadProfessionalsAdmin = async () => {
+    if (!isSupabaseConfigured) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const [institutionsRes, professionalsRes] = await Promise.all([
+        supabase.from("institutions").select("id,name,slug,is_active").order("name"),
+        supabase.from("professionals").select("id,institution_id,full_name,role,specialty,email,initials,avatar_color,is_active,institutions(id,name,slug)").order("full_name"),
+      ]);
+      const err = institutionsRes.error || professionalsRes.error;
+      if (err) throw err;
+      const inst = institutionsRes.data || [];
+      setInstitutions(inst);
+      setItems(professionalsRes.data || []);
+      setFilterInstitutionId(prev => prev || defaultInstitutionId || inst[0]?.id || "");
+      setForm(prev => ({ ...prev, institutionId: prev.institutionId || defaultInstitutionId || inst[0]?.id || "" }));
+    } catch (error) {
+      setMessage(error?.message || "No se pudieron cargar profesionales.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadProfessionalsAdmin(); }, [activeInstitution]);
+
+  const resetForm = () => setForm({ id:"", institutionId: filterInstitutionId || defaultInstitutionId || institutions[0]?.id || "", fullName:"", role:"psiquiatra", specialty:"", email:"", initials:"", isActive:true });
+
+  const editProfessional = (item) => {
+    setForm({
+      id: item.id,
+      institutionId: item.institution_id || filterInstitutionId || "",
+      fullName: item.full_name || "",
+      role: item.role || "psiquiatra",
+      specialty: item.specialty || "",
+      email: item.email || "",
+      initials: item.initials || makeInitials(item.full_name),
+      isActive: item.is_active !== false,
+    });
+  };
+
+  const visibleProfessionals = items.filter(p => !filterInstitutionId || p.institution_id === filterInstitutionId);
+
+  const saveProfessional = async (e) => {
+    e?.preventDefault?.();
+    setLoading(true);
+    setMessage("");
+    try {
+      const fullName = form.fullName.trim();
+      if (!form.institutionId) throw new Error("Selecciona institución.");
+      if (!fullName) throw new Error("Escribe el nombre del profesional.");
+      const { error } = await supabase.rpc("clincoord_upsert_professional_v1", {
+        p_professional_id: form.id || null,
+        p_institution_id: form.institutionId,
+        p_full_name: fullName,
+        p_role: form.role,
+        p_specialty: form.specialty?.trim() || null,
+        p_email: form.email?.trim().toLowerCase() || null,
+        p_initials: (form.initials?.trim() || makeInitials(fullName)).slice(0, 6).toUpperCase(),
+        p_is_active: Boolean(form.isActive),
+      });
+      if (error) throw error;
+      setMessage(form.id ? "Profesional actualizado." : "Profesional creado.");
+      resetForm();
+      await loadProfessionalsAdmin();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar el profesional.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Profesionales institucionales</div>
+          <div className="text-xs text-slate-500 mt-1">Crea profesionales por institución. Luego puedes asociarlos a usuarios y pacientes.</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={filterInstitutionId} onChange={e => { setFilterInstitutionId(e.target.value); setForm(prev => ({ ...prev, institutionId:e.target.value })); }} className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+            <option value="">Todas</option>
+            {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <button onClick={loadProfessionalsAdmin} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+        </div>
+      </div>
+
+      <form onSubmit={saveProfessional} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Institución</label>
+            <select value={form.institutionId} onChange={e => setForm({...form, institutionId:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre</label>
+            <input value={form.fullName} onChange={e => setForm({...form, fullName:e.target.value, initials: form.initials || makeInitials(e.target.value)})} placeholder="Dra. Nombre Apellido" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Rol</label>
+            <select value={form.role} onChange={e => setForm({...form, role:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {ROLE_OPTIONS_ADMIN.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Especialidad / cargo</label>
+            <input value={form.specialty} onChange={e => setForm({...form, specialty:e.target.value})} placeholder="Psiquiatría adultos, enfermería SM…" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Email institucional/opcional</label>
+            <input value={form.email} onChange={e => setForm({...form, email:e.target.value})} placeholder="profesional@correo.com" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Iniciales</label>
+              <input value={form.initials} onChange={e => setForm({...form, initials:e.target.value.toUpperCase()})} placeholder="VR" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
+              <select value={form.isActive ? "true" : "false"} onChange={e => setForm({...form, isActive:e.target.value === "true"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+                <option value="true">Activo</option>
+                <option value="false">Inactivo</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear profesional"}</button>
+        </div>
+      </form>
+
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full min-w-[900px] text-xs">
+          <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
+            <tr><th className="px-3 py-2 text-left">Profesional</th><th className="px-3 py-2 text-left">Institución</th><th className="px-3 py-2 text-left">Rol</th><th className="px-3 py-2 text-left">Email</th><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-right">Acciones</th></tr>
+          </thead>
+          <tbody>
+            {visibleProfessionals.map(item => (
+              <tr key={item.id} className="border-t border-slate-800">
+                <td className="px-3 py-2"><div className="font-semibold text-slate-200">{item.full_name}</div><div className="text-slate-500">{item.specialty || "Sin especialidad"} · {item.initials || "—"}</div></td>
+                <td className="px-3 py-2 text-slate-300">{item.institutions?.name || "—"}</td>
+                <td className="px-3 py-2 text-sky-400 font-semibold">{ROLE_LABEL_ADMIN[item.role] || item.role}</td>
+                <td className="px-3 py-2 text-slate-500">{item.email || "—"}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${item.is_active !== false ? "border-emerald-700 text-emerald-400" : "border-red-700 text-red-400"}`}>{item.is_active !== false ? "Activo" : "Inactivo"}</span></td>
+                <td className="px-3 py-2 text-right"><button onClick={() => editProfessional(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button></td>
+              </tr>
+            ))}
+            {!visibleProfessionals.length && <tr><td colSpan="6" className="px-3 py-6 text-center text-slate-500">Sin profesionales visibles.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, activeUser, setActiveUser, authSession, onDataChanged }) => (
   <div className="space-y-5 max-w-5xl">
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
@@ -3655,6 +4001,8 @@ const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode,
         Una cuenta puede tener membresías en varias instituciones. Al cambiar de espacio, pacientes, profesionales, programas, alertas y archivos se filtran por permisos reales de Supabase.
       </p>
     </div>
+    <InstitutionsAdminPanel onDataChanged={onDataChanged} />
+    <ProfessionalsAdminPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <UserAccessAdminPanel authSession={authSession} activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
       <div className="text-slate-300 font-semibold text-sm mb-4">Apariencia</div>
