@@ -1777,6 +1777,34 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   return { id: patient._dbId, clinical_code: payload.clinical_code };
 };
 
+const patientSafetyActionInSupabase = async ({ action, patient, reason, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const trimmedReason = (reason || "").trim();
+  if (trimmedReason.length < 8) throw new Error("Debes escribir un motivo claro, mínimo 8 caracteres.");
+
+  if (action === "archive") {
+    const { error } = await supabase.rpc("clincoord_archive_patient_v1", {
+      p_patient_id: patient._dbId,
+      p_reason: trimmedReason,
+    });
+    if (error) throw error;
+    return;
+  }
+
+  if (action === "delete") {
+    const { error } = await supabase.rpc("clincoord_delete_patient_v1", {
+      p_patient_id: patient._dbId,
+      p_reason: trimmedReason,
+    });
+    if (error) throw error;
+    return;
+  }
+
+  throw new Error("Acción no reconocida.");
+};
+
 const defaultPatientForm = () => ({
   clinical_code:"",
   initials:"",
@@ -2732,8 +2760,96 @@ const ClinicalFilesView = ({ authSession, onDataChanged }) => {
   );
 };
 
+const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSaved }) => {
+  const isDelete = action === "delete";
+  const [reason, setReason] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const canConfirm = reason.trim().length >= 8 && (!isDelete || confirmText.trim().toUpperCase() === "ELIMINAR");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!canConfirm) return;
+    setSaving(true);
+    setError("");
+    try {
+      await patientSafetyActionInSupabase({ action, patient, reason, authSession });
+      await onSaved?.();
+      onClose?.(true);
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo completar la acción.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
+      <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
+        <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.2 · Gestión segura de pacientes</div>
+          <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
+            {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Paciente: <span className="font-black text-white">{patient?.id}</span> · {patient?.initials}
+          </p>
+        </div>
+
+        <div className="space-y-4 p-5">
+          {isDelete ? (
+            <div className="rounded-2xl border border-red-800 bg-red-950/20 p-3 text-sm text-red-200">
+              Esta acción elimina el paciente y sus registros asociados. Úsala solo para pacientes de prueba o creados por error. La trazabilidad registra el intento antes de borrar.
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-100">
+              Esta acción conserva el registro, cambia el estado a alta y agrega una nota de archivo/egreso. Es la opción recomendada para pacientes reales.
+            </div>
+          )}
+
+          <div>
+            <FieldLabel>Motivo obligatorio</FieldLabel>
+            <TextAreaInput
+              value={reason}
+              onChange={setReason}
+              rows={4}
+              placeholder={isDelete ? "Ejemplo: Paciente de prueba creado durante configuración inicial." : "Ejemplo: Alta administrativa / egreso / caso duplicado archivado."}
+            />
+          </div>
+
+          {isDelete && (
+            <div>
+              <FieldLabel>Confirmación</FieldLabel>
+              <TextInput
+                value={confirmText}
+                onChange={setConfirmText}
+                placeholder="Escribe ELIMINAR para confirmar"
+              />
+            </div>
+          )}
+
+          {error && <div className="rounded-xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-slate-800 p-5">
+          <button type="button" onClick={() => onClose?.(false)} className="rounded-full border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Cancelar</button>
+          <button
+            type="submit"
+            disabled={!canConfirm || saving}
+            className={`rounded-full px-4 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50 ${isDelete ? "bg-red-600 hover:bg-red-500" : "bg-amber-600 hover:bg-amber-500"}`}
+          >
+            {saving ? "Procesando…" : isDelete ? "Eliminar definitivamente" : "Archivar / egresar"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
-const PatientDetail = ({ patient, onClose, onEdit, authSession, onDataChanged }) => {
+const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
   const rc = getRiskCfg(patient.risk);
   const patAlerts = ALERTS.filter(a => a.patient === patient.id);
@@ -2741,6 +2857,7 @@ const PatientDetail = ({ patient, onClose, onEdit, authSession, onDataChanged })
   const patTrace  = TRACE_EVENTS.filter(t => t.patient === patient.id);
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
   const patFiles  = FILES.filter(f => f.patient === patient.id);
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
   const TABS = [
     { id:"resumen",     label:"Resumen" },
@@ -2773,6 +2890,22 @@ const PatientDetail = ({ patient, onClose, onEdit, authSession, onDataChanged })
                     className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-800/50"
                   >
                     Editar
+                  </button>
+                )}
+                {USING_SUPABASE_DATA && onSafetyAction && (
+                  <button
+                    onClick={() => onSafetyAction("archive", patient)}
+                    className="rounded-full border border-amber-700 bg-amber-900/30 px-3 py-1 text-xs font-black text-amber-300 hover:bg-amber-800/50"
+                  >
+                    Archivar
+                  </button>
+                )}
+                {USING_SUPABASE_DATA && onSafetyAction && isAdmin && (
+                  <button
+                    onClick={() => onSafetyAction("delete", patient)}
+                    className="rounded-full border border-red-700 bg-red-900/30 px-3 py-1 text-xs font-black text-red-300 hover:bg-red-800/50"
+                  >
+                    Eliminar
                   </button>
                 )}
                 <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>
@@ -3121,11 +3254,20 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const [viewMode, setViewMode] = useState("grid");
   const [formMode, setFormMode] = useState(null);
   const [editingPatient, setEditingPatient] = useState(null);
+  const [safetyAction, setSafetyAction] = useState(null);
   const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
   const openCreate = () => { setEditingPatient(null); setFormMode("create"); };
   const openEdit = (patient) => { setSelected(null); setEditingPatient(patient); setFormMode("edit"); };
   const closeForm = () => { setFormMode(null); setEditingPatient(null); };
+  const openSafetyAction = (action, patient) => setSafetyAction({ action, patient });
+  const closeSafetyAction = async (changed=false) => {
+    setSafetyAction(null);
+    if (changed) {
+      setSelected(null);
+      await onDataChanged?.();
+    }
+  };
 
   const filtered = useMemo(() => PATIENTS.filter(p => {
     const q = normalizeText(search);
@@ -3140,7 +3282,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
 
   return (
     <div>
-      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} authSession={authSession} onDataChanged={onDataChanged} />}
+      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} onSafetyAction={openSafetyAction} authSession={authSession} onDataChanged={onDataChanged} />}
       {formMode && (
         <PatientFormModal
           mode={formMode}
@@ -3149,6 +3291,15 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
           authProfile={authProfile}
           activeInstitution={activeInstitution || workspaceKey}
           onClose={closeForm}
+          onSaved={onDataChanged}
+        />
+      )}
+      {safetyAction && (
+        <PatientSafetyActionModal
+          action={safetyAction.action}
+          patient={safetyAction.patient}
+          authSession={authSession}
+          onClose={closeSafetyAction}
           onSaved={onDataChanged}
         />
       )}
