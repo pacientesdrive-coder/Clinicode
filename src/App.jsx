@@ -3309,10 +3309,21 @@ const InboxView = () => {
 const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged }) => {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [institutions, setInstitutions] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [message, setMessage] = useState("");
-  const [form, setForm] = useState({ email: "", institutionId: "", role: "psiquiatra", professionalId: "", status: "approved" });
+  const [filter, setFilter] = useState("todos");
+  const [query, setQuery] = useState("");
+  const [form, setForm] = useState({
+    email: "",
+    fullName: "",
+    institutionId: "",
+    role: "psiquiatra",
+    professionalId: "",
+    status: "approved",
+    createProfessional: true,
+  });
 
   const roleOptions = [
     ["admin", "Administrador institucional"],
@@ -3326,20 +3337,93 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
     ["trabajador_social", "Trabajador/a social"],
     ["solo_lectura", "Solo lectura"],
   ];
+  const roleLabel = Object.fromEntries(roleOptions);
+  const statusLabel = {
+    approved: "Aprobado",
+    pending: "Pendiente",
+    rejected: "Rechazado",
+    suspended: "Suspendido",
+    sin_acceso: "Sin acceso",
+  };
+
+  const buildRows = ({ memberships = [], profiles = [] }) => {
+    const profileMap = new Map((profiles || []).map(p => [p.id, p]));
+    const seenMembershipUsers = new Set();
+    const membershipRows = (memberships || []).map(m => {
+      const profile = profileMap.get(m.user_id) || {};
+      seenMembershipUsers.add(m.user_id);
+      return {
+        kind: "membership",
+        id: m.id,
+        membershipId: m.id,
+        userId: m.user_id,
+        email: profile.email || m.user_id,
+        fullName: profile.full_name || "Sin nombre",
+        isProfileActive: profile.is_active !== false,
+        provider: profile.created_by_auth_provider || "—",
+        institutionId: m.institution_id,
+        institutionName: m.institutions?.name || "—",
+        institutionSlug: m.institutions?.slug,
+        role: m.role,
+        professionalId: m.professional_id || "",
+        professionalName: m.professionals?.full_name || "Sin asociar",
+        status: m.status || "approved",
+        isActive: m.is_active !== false,
+        isDefault: Boolean(m.is_default),
+      };
+    });
+    const pendingRows = (profiles || [])
+      .filter(p => !seenMembershipUsers.has(p.id))
+      .map(p => ({
+        kind: "profile",
+        id: `profile-${p.id}`,
+        membershipId: null,
+        userId: p.id,
+        email: p.email,
+        fullName: p.full_name || "Sin nombre",
+        isProfileActive: p.is_active !== false,
+        provider: p.created_by_auth_provider || "—",
+        institutionId: "",
+        institutionName: "Sin institución",
+        institutionSlug: "",
+        role: "sin_rol",
+        professionalId: "",
+        professionalName: "Sin asociar",
+        status: "sin_acceso",
+        isActive: p.is_active !== false,
+        isDefault: false,
+      }));
+    return [...pendingRows, ...membershipRows].sort((a, b) => {
+      const statusOrder = { sin_acceso: 0, pending: 1, approved: 2, suspended: 3, rejected: 4 };
+      const so = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+      if (so !== 0) return so;
+      return `${a.email}-${a.institutionName}`.localeCompare(`${b.email}-${b.institutionName}`);
+    });
+  };
 
   const loadAccessData = async () => {
     if (!authSession?.user?.id || !isSupabaseConfigured) return;
     setLoading(true);
     setMessage("");
     try {
-      const [membershipsRes, institutionsRes, professionalsRes] = await Promise.all([
-        supabase.from("memberships").select("id,user_id,institution_id,professional_id,role,status,is_active,is_default,profiles(id,email,full_name,is_active),institutions(id,name,slug),professionals(id,full_name,role,email,initials)").order("created_at", { ascending: false }),
+      const [membershipsRes, profilesRes, institutionsRes, professionalsRes] = await Promise.all([
+        supabase
+          .from("memberships")
+          .select("id,user_id,institution_id,professional_id,role,status,is_active,is_default,created_at,institutions(id,name,slug),professionals(id,full_name,role,email,initials)")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("profiles")
+          .select("id,email,full_name,is_active,created_by_auth_provider,created_at")
+          .order("created_at", { ascending: false }),
         supabase.from("institutions").select("id,name,slug,kind").order("name"),
         supabase.from("professionals").select("id,institution_id,full_name,role,email,initials").order("full_name"),
       ]);
-      const err = membershipsRes.error || institutionsRes.error || professionalsRes.error;
+      const err = membershipsRes.error || profilesRes.error || institutionsRes.error || professionalsRes.error;
       if (err) throw err;
-      setRows(membershipsRes.data || []);
+      const profilesData = profilesRes.data || [];
+      const membershipsData = membershipsRes.data || [];
+      setProfiles(profilesData);
+      setRows(buildRows({ memberships: membershipsData, profiles: profilesData }));
       setInstitutions(institutionsRes.data || []);
       setProfessionals(professionalsRes.data || []);
       const activeDbId = getMembershipForWorkspace(activeInstitution)?.institutionDbId;
@@ -3354,28 +3438,96 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
   useEffect(() => { loadAccessData(); }, [authSession?.user?.id, activeInstitution]);
 
   const filteredProfessionals = professionals.filter(p => !form.institutionId || p.institution_id === form.institutionId);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRows = rows.filter(row => {
+    const matchesFilter = filter === "todos" ||
+      (filter === "sin_acceso" && row.status === "sin_acceso") ||
+      (filter === "approved" && row.status === "approved") ||
+      (filter === "pending" && row.status === "pending") ||
+      (filter === "suspended" && row.status === "suspended") ||
+      (filter === "rejected" && row.status === "rejected");
+    const matchesQuery = !normalizedQuery ||
+      row.email?.toLowerCase().includes(normalizedQuery) ||
+      row.fullName?.toLowerCase().includes(normalizedQuery) ||
+      row.institutionName?.toLowerCase().includes(normalizedQuery) ||
+      row.professionalName?.toLowerCase().includes(normalizedQuery);
+    return matchesFilter && matchesQuery;
+  });
+
+  const getProfileByEmail = (email) => profiles.find(p => p.email?.toLowerCase() === email?.trim().toLowerCase());
+
+  const handleEmailChange = (email) => {
+    const profile = getProfileByEmail(email);
+    setForm(prev => ({
+      ...prev,
+      email,
+      fullName: profile?.full_name && !prev.fullName ? profile.full_name : prev.fullName,
+    }));
+  };
+
+  const prefillFromRow = (row) => {
+    setForm({
+      email: row.email || "",
+      fullName: row.fullName || "",
+      institutionId: row.institutionId || form.institutionId || institutions[0]?.id || "",
+      role: row.role && row.role !== "sin_rol" ? row.role : "psiquiatra",
+      professionalId: row.professionalId || "",
+      status: row.status && row.status !== "sin_acceso" ? row.status : "approved",
+      createProfessional: !row.professionalId,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handleAssign = async (e) => {
-    e.preventDefault();
+    e?.preventDefault?.();
     setLoading(true);
     setMessage("");
     try {
       if (!form.email.trim()) throw new Error("Escribe el email del usuario.");
       if (!form.institutionId) throw new Error("Selecciona institución.");
-      const { error } = await supabase.rpc("clincoord_assign_membership", {
+      const profile = getProfileByEmail(form.email);
+      const finalName = form.fullName.trim() || profile?.full_name || form.email.split("@")[0];
+      const { error } = await supabase.rpc("clincoord_assign_membership_v2", {
         p_email: form.email.trim().toLowerCase(),
         p_institution_id: form.institutionId,
         p_role: form.role,
         p_professional_id: form.professionalId || null,
         p_status: form.status,
+        p_full_name: finalName,
+        p_create_professional: Boolean(form.createProfessional || !form.professionalId),
       });
       if (error) throw error;
       setMessage("Permiso guardado. Si el usuario está conectado, debe recargar o volver a iniciar sesión.");
-      setForm(prev => ({ ...prev, email: "", professionalId: "" }));
+      setForm(prev => ({ ...prev, email: "", fullName: "", professionalId: "", createProfessional: true }));
       await loadAccessData();
       onDataChanged?.();
     } catch (error) {
       setMessage(error?.message || "No se pudo guardar el permiso.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const quickStatus = async (row, status) => {
+    if (!row.email || !row.institutionId) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { error } = await supabase.rpc("clincoord_assign_membership_v2", {
+        p_email: row.email.toLowerCase(),
+        p_institution_id: row.institutionId,
+        p_role: row.role && row.role !== "sin_rol" ? row.role : "solo_lectura",
+        p_professional_id: row.professionalId || null,
+        p_status: status,
+        p_full_name: row.fullName || row.email.split("@")[0],
+        p_create_professional: false,
+      });
+      if (error) throw error;
+      setMessage(status === "approved" ? "Usuario aprobado." : status === "suspended" ? "Acceso suspendido." : "Estado actualizado.");
+      await loadAccessData();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo actualizar el estado.");
     } finally {
       setLoading(false);
     }
@@ -3388,16 +3540,21 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-slate-300 font-semibold text-sm">Usuarios y permisos</div>
-          <div className="text-xs text-slate-500 mt-1">El login crea identidad; esta sección asigna institución, rol y acceso.</div>
+          <div className="text-xs text-slate-500 mt-1">El login crea identidad; esta sección asigna institución, rol, estado y registro profesional asociado.</div>
         </div>
-        <button onClick={loadAccessData} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800">Actualizar</button>
+        <button onClick={loadAccessData} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800">{loading ? "Cargando…" : "Actualizar"}</button>
       </div>
 
       <form onSubmit={handleAssign} className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4 md:grid-cols-2">
         <div>
           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Email del usuario</label>
-          <input value={form.email} onChange={e => setForm({...form, email:e.target.value})} placeholder="usuario@correo.com" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
-          <div className="mt-1 text-[10px] text-slate-500">El usuario debe haber iniciado sesión o existir en Supabase Auth.</div>
+          <input value={form.email} onChange={e => handleEmailChange(e.target.value)} placeholder="usuario@correo.com" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          <div className="mt-1 text-[10px] text-slate-500">El usuario debe haber iniciado sesión con Google/email o existir en Supabase Auth.</div>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre visible</label>
+          <input value={form.fullName} onChange={e => setForm({...form, fullName:e.target.value})} placeholder="Nombre que verá el equipo" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          <div className="mt-1 text-[10px] text-slate-500">También actualiza el registro profesional si se crea automáticamente.</div>
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Institución</label>
@@ -3407,34 +3564,49 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Rol</label>
-          <select value={form.role} onChange={e => setForm({...form, role:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+          <select value={form.role} onChange={e => setForm({...form, role:e.target.value, createProfessional: e.target.value !== "solo_lectura"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
             {roleOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Registro profesional asociado</label>
-          <select value={form.professionalId} onChange={e => setForm({...form, professionalId:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
-            <option value="">Sin asociar / crear después</option>
-            {filteredProfessionals.map(p => <option key={p.id} value={p.id}>{p.full_name} · {p.role}</option>)}
+          <select value={form.professionalId} onChange={e => setForm({...form, professionalId:e.target.value, createProfessional: !e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+            <option value="">Sin asociar / crear automáticamente</option>
+            {filteredProfessionals.map(p => <option key={p.id} value={p.id}>{p.full_name} · {roleLabel[p.role] || p.role}</option>)}
           </select>
+          <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400">
+            <input type="checkbox" checked={form.createProfessional} onChange={e => setForm({...form, createProfessional:e.target.checked})} className="accent-sky-500" />
+            Crear/actualizar registro profesional si no hay uno seleccionado
+          </label>
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
           <select value={form.status} onChange={e => setForm({...form, status:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
             <option value="approved">Aprobado</option>
             <option value="pending">Pendiente</option>
+            <option value="rejected">Rechazado</option>
             <option value="suspended">Suspendido</option>
           </select>
         </div>
-        <div className="flex items-end">
-          <button type="submit" disabled={loading} className="w-full rounded-xl bg-sky-600 px-4 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">Guardar permiso</button>
+        <div className="md:col-span-2 flex items-center justify-end gap-2">
+          <button type="button" onClick={() => setForm({ email:"", fullName:"", institutionId: form.institutionId, role:"psiquiatra", professionalId:"", status:"approved", createProfessional:true })} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">Guardar permiso</button>
         </div>
       </form>
 
-      {message && <div className="mt-3 rounded-xl border border-amber-800 bg-amber-900/20 p-3 text-xs text-amber-300">{message}</div>}
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-amber-800 bg-amber-900/20 text-amber-300"}`}>{message}</div>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar usuario, email, institución…" className="min-w-[240px] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+        {[
+          ["todos", "Todos"], ["sin_acceso", "Sin acceso"], ["pending", "Pendientes"], ["approved", "Aprobados"], ["suspended", "Suspendidos"], ["rejected", "Rechazados"]
+        ].map(([value,label]) => (
+          <button key={value} onClick={() => setFilter(value)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${filter === value ? "border-sky-500 bg-sky-600 text-white" : "border-slate-700 text-slate-400 hover:bg-slate-800"}`}>{label}</button>
+        ))}
+      </div>
 
       <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
-        <table className="w-full min-w-[760px] text-xs">
+        <table className="w-full min-w-[920px] text-xs">
           <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
             <tr>
               <th className="px-3 py-2 text-left">Usuario</th>
@@ -3442,19 +3614,31 @@ const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged })
               <th className="px-3 py-2 text-left">Rol</th>
               <th className="px-3 py-2 text-left">Profesional</th>
               <th className="px-3 py-2 text-left">Estado</th>
+              <th className="px-3 py-2 text-right">Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {visibleRows.map(r => (
               <tr key={r.id} className="border-t border-slate-800">
-                <td className="px-3 py-2"><div className="font-semibold text-slate-200">{r.profiles?.full_name || "—"}</div><div className="text-slate-500">{r.profiles?.email || r.user_id}</div></td>
-                <td className="px-3 py-2 text-slate-300">{r.institutions?.name || "—"}</td>
-                <td className="px-3 py-2 text-sky-400 font-semibold">{r.role}</td>
-                <td className="px-3 py-2 text-slate-400">{r.professionals?.full_name || "Sin asociar"}</td>
-                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${r.status === "approved" ? "border-emerald-700 text-emerald-400" : r.status === "suspended" ? "border-red-700 text-red-400" : "border-amber-700 text-amber-400"}`}>{r.status || "approved"}</span></td>
+                <td className="px-3 py-2">
+                  <div className="font-semibold text-slate-200">{r.fullName || "—"}</div>
+                  <div className="text-slate-500">{r.email || r.userId}</div>
+                  <div className="text-[10px] text-slate-600">{r.provider}</div>
+                </td>
+                <td className="px-3 py-2 text-slate-300">{r.institutionName || "Sin institución"}{r.isDefault && <span className="ml-1 text-[10px] text-sky-400">· default</span>}</td>
+                <td className="px-3 py-2 text-sky-400 font-semibold">{roleLabel[r.role] || r.role || "Sin rol"}</td>
+                <td className="px-3 py-2 text-slate-400">{r.professionalName || "Sin asociar"}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${r.status === "approved" ? "border-emerald-700 text-emerald-400" : r.status === "suspended" ? "border-red-700 text-red-400" : r.status === "sin_acceso" ? "border-slate-700 text-slate-400" : "border-amber-700 text-amber-400"}`}>{statusLabel[r.status] || r.status || "—"}</span></td>
+                <td className="px-3 py-2 text-right">
+                  <div className="flex justify-end gap-1">
+                    <button onClick={() => prefillFromRow(r)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar/asignar</button>
+                    {r.kind === "membership" && r.status !== "approved" && <button onClick={() => quickStatus(r, "approved")} className="rounded-lg border border-emerald-700 px-2 py-1 text-[10px] font-bold text-emerald-400 hover:bg-emerald-900/20">Aprobar</button>}
+                    {r.kind === "membership" && r.status !== "suspended" && <button onClick={() => quickStatus(r, "suspended")} className="rounded-lg border border-red-700 px-2 py-1 text-[10px] font-bold text-red-400 hover:bg-red-900/20">Suspender</button>}
+                  </div>
+                </td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan="5" className="px-3 py-6 text-center text-slate-500">Sin usuarios visibles para tu nivel de acceso.</td></tr>}
+            {!visibleRows.length && <tr><td colSpan="6" className="px-3 py-6 text-center text-slate-500">Sin usuarios visibles para este filtro.</td></tr>}
           </tbody>
         </table>
       </div>
