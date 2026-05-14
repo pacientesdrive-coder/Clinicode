@@ -27,6 +27,11 @@ const APP_THEMES = {
   bosque:   { label:"Verde salud",     icon:"🌿", accent:"#10b981", accent2:"#a3e635", shell:"#07140f", card:"#0f1f19", soft:"#142b22", text:"#f8fafc" },
   ambar:    { label:"Ámbar contraste", icon:"⚡", accent:"#f59e0b", accent2:"#fb7185", shell:"#151008", card:"#22190d", soft:"#2d2111", text:"#fff7ed" },
   claro:    { label:"Claro minimal",   icon:"☀️", accent:"#0284c7", accent2:"#7c3aed", shell:"#f8fafc", card:"#ffffff", soft:"#f1f5f9", text:"#0f172a" },
+  neon:     { label:"Neón diagnóstico", icon:"🧪", accent:"#06b6d4", accent2:"#f472b6", shell:"#050914", card:"#0b1020", soft:"#111827", text:"#e0f2fe" },
+  coral:    { label:"Coral clínico", icon:"🪸", accent:"#ff4d6d", accent2:"#fb923c", shell:"#14070b", card:"#210c13", soft:"#2f111c", text:"#fff1f2" },
+  aurora:   { label:"Aurora profesional", icon:"🌌", accent:"#34d399", accent2:"#a78bfa", shell:"#04130f", card:"#0a1c18", soft:"#10251f", text:"#ecfeff" },
+  titanio:  { label:"Titanio púrpura", icon:"💎", accent:"#c084fc", accent2:"#67e8f9", shell:"#0b0714", card:"#171126", soft:"#201633", text:"#faf5ff" },
+  arcoiris: { label:"Arcoiris clínico", icon:"🌈", accent:"#f43f5e", accent2:"#22d3ee", shell:"#0b1020", card:"#111827", soft:"#182236", text:"#f8fafc" },
 };
 const APP_THEME_KEYS = Object.keys(APP_THEMES);
 
@@ -1430,7 +1435,7 @@ const ThemeToggle = ({ themeMode, setThemeMode }) => {
       onClick={() => setThemeMode(nextKey)}
       className="fixed top-3 right-40 z-[80] inline-flex items-center gap-2 rounded-full border border-slate-500/50 bg-slate-900/90 px-3 py-2 text-xs font-bold text-slate-100 shadow-xl shadow-black/30 backdrop-blur hover:bg-slate-800 transition-colors light-control"
       aria-label="Cambiar tema visual"
-      title="Cambia entre 5 temas visuales por usuario"
+      title="Cambia entre 10 temas visuales por usuario"
     >
       <span className="text-sm">{cfg.icon}</span>
       <span>{cfg.label}</span>
@@ -5061,15 +5066,39 @@ const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode,
     <ProfessionalsAdminPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <UserAccessAdminPanel authSession={authSession} activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
-      <div className="text-slate-300 font-semibold text-sm mb-4">Apariencia</div>
-      <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-slate-100">Modo {themeMode === "light" ? "claro" : "oscuro"}</div>
-          <div className="text-xs text-slate-500">Cambia la interfaz completa sin alterar los datos visibles.</div>
+          <div className="text-slate-300 font-semibold text-sm">Apariencia</div>
+          <div className="mt-1 text-xs text-slate-500">Elige un tema por usuario. Se guarda en Supabase y no altera los datos clínicos.</div>
         </div>
-        <button onClick={() => setThemeMode(themeMode === "light" ? "dark" : "light")} className="rounded-full bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500">
-          {themeMode === "light" ? "Usar oscuro" : "Usar claro"}
-        </button>
+        <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-bold text-slate-200">
+          {APP_THEMES[themeMode]?.icon} {APP_THEMES[themeMode]?.label || "Tema"}
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {APP_THEME_KEYS.map(key => {
+          const cfg = APP_THEMES[key];
+          const active = key === themeMode;
+          return (
+            <button
+              key={key}
+              onClick={() => setThemeMode(key)}
+              className={`group rounded-2xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-xl ${active ? "border-sky-500 bg-slate-900 shadow-sky-950/40" : "border-slate-800 bg-slate-900/50 hover:border-slate-600"}`}
+              style={{ boxShadow: active ? `0 0 0 1px ${cfg.accent}, 0 0 24px ${cfg.accent}33` : undefined }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-lg">{cfg.icon}</span>
+                {active && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-emerald-300">Activo</span>}
+              </div>
+              <div className="mt-2 text-xs font-black text-slate-100">{cfg.label}</div>
+              <div className="mt-2 flex gap-1">
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.accent }} />
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.accent2 }} />
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.card }} />
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
     <div className="bg-red-900/10 border border-red-800/30 rounded-xl p-4">
@@ -5341,12 +5370,15 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         * { box-sizing: border-box; }
         body { background: radial-gradient(circle at top left, rgba(14,165,233,.12), transparent 34%), radial-gradient(circle at 80% 10%, rgba(139,92,246,.10), transparent 30%), #080d13; }
         button, input, select, textarea { font-family: inherit; }
-        .theme-nocturno, .theme-clinico, .theme-bosque, .theme-ambar, .theme-claro { background: var(--cc-shell) !important; color: var(--cc-text) !important; }
-        .theme-nocturno [class*="bg-[#0d1117]"], .theme-nocturno [class*="bg-[#131920]"], .theme-clinico [class*="bg-[#0d1117]"], .theme-clinico [class*="bg-[#131920]"], .theme-bosque [class*="bg-[#0d1117]"], .theme-bosque [class*="bg-[#131920]"], .theme-ambar [class*="bg-[#0d1117]"], .theme-ambar [class*="bg-[#131920]"] { background-color: var(--cc-card) !important; }
+        .theme-nocturno, .theme-clinico, .theme-bosque, .theme-ambar, .theme-claro, .theme-neon, .theme-coral, .theme-aurora, .theme-titanio, .theme-arcoiris { background: var(--cc-shell) !important; color: var(--cc-text) !important; }
+        .theme-nocturno [class*="bg-[#0d1117]"], .theme-nocturno [class*="bg-[#131920]"], .theme-clinico [class*="bg-[#0d1117]"], .theme-clinico [class*="bg-[#131920]"], .theme-bosque [class*="bg-[#0d1117]"], .theme-bosque [class*="bg-[#131920]"], .theme-ambar [class*="bg-[#0d1117]"], .theme-ambar [class*="bg-[#131920]"], .theme-neon [class*="bg-[#0d1117]"], .theme-neon [class*="bg-[#131920]"], .theme-coral [class*="bg-[#0d1117]"], .theme-coral [class*="bg-[#131920]"], .theme-aurora [class*="bg-[#0d1117]"], .theme-aurora [class*="bg-[#131920]"], .theme-titanio [class*="bg-[#0d1117]"], .theme-titanio [class*="bg-[#131920]"], .theme-arcoiris [class*="bg-[#0d1117]"], .theme-arcoiris [class*="bg-[#131920]"] { background-color: var(--cc-card) !important; }
         .theme-claro [class*="bg-[#0d1117]"], .theme-claro [class*="bg-[#131920]"], .theme-claro [class*="bg-[#1a2332]"] { background-color: #ffffff !important; }
-        .theme-clinico .bg-sky-600, .theme-bosque .bg-sky-600, .theme-ambar .bg-sky-600, .theme-nocturno .bg-sky-600 { background-color: var(--cc-accent) !important; }
-        .theme-clinico .text-sky-400, .theme-bosque .text-sky-400, .theme-ambar .text-sky-400, .theme-nocturno .text-sky-400 { color: var(--cc-accent-2) !important; }
-        .theme-clinico .border-sky-600, .theme-bosque .border-sky-600, .theme-ambar .border-sky-600, .theme-nocturno .border-sky-600 { border-color: var(--cc-accent) !important; }
+        .theme-clinico .bg-sky-600, .theme-bosque .bg-sky-600, .theme-ambar .bg-sky-600, .theme-nocturno .bg-sky-600, .theme-neon .bg-sky-600, .theme-coral .bg-sky-600, .theme-aurora .bg-sky-600, .theme-titanio .bg-sky-600, .theme-arcoiris .bg-sky-600 { background-color: var(--cc-accent) !important; }
+        .theme-clinico .text-sky-400, .theme-bosque .text-sky-400, .theme-ambar .text-sky-400, .theme-nocturno .text-sky-400, .theme-neon .text-sky-400, .theme-coral .text-sky-400, .theme-aurora .text-sky-400, .theme-titanio .text-sky-400, .theme-arcoiris .text-sky-400 { color: var(--cc-accent-2) !important; }
+        .theme-clinico .border-sky-600, .theme-bosque .border-sky-600, .theme-ambar .border-sky-600, .theme-nocturno .border-sky-600, .theme-neon .border-sky-600, .theme-coral .border-sky-600, .theme-aurora .border-sky-600, .theme-titanio .border-sky-600, .theme-arcoiris .border-sky-600 { border-color: var(--cc-accent) !important; }
+        .theme-arcoiris .bg-sky-600 { background-image: linear-gradient(90deg, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #6366f1, #d946ef) !important; }
+        .theme-arcoiris .border-sky-600, .theme-arcoiris .border-sky-800\/60 { border-color: #a78bfa !important; }
+        .theme-arcoiris .text-sky-400 { background: linear-gradient(90deg, #38bdf8, #a78bfa, #fb7185); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: #0d1117; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
