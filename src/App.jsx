@@ -1498,28 +1498,42 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v2.3</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.6.1</div>
     </div>
   </header>
 );
 
 
 // ─── CAMBIO DE VERSIÓN WEB / APP MÓVIL ───────────────────────────────────
-const ViewModeToggle = ({ mode, setMode, autoIsMobile }) => {
+const ViewModeToggle = ({ mode, setMode, autoIsMobile, embedded = false }) => {
   const effective = mode === "auto" ? (autoIsMobile ? "mobile" : "desktop") : mode;
-  const label = mode === "auto" ? `Auto ${autoIsMobile ? "móvil" : "web"}` : (effective === "mobile" ? "Móvil fijo" : "Web fija");
-  const next = mode === "auto" ? "desktop" : mode === "desktop" ? "mobile" : "auto";
-  return (
-    <button
-      onClick={() => setMode(next)}
-      className="fixed top-3 right-3 z-[80] inline-flex items-center gap-2 rounded-full border border-sky-500/60 bg-sky-600/95 px-3 py-2 text-xs font-bold text-white shadow-xl shadow-black/40 backdrop-blur hover:bg-sky-500 transition-colors"
-      aria-label="Cambiar modo de visualización"
-      title="Auto detecta celular/escritorio. Clic: web fija → móvil fija → auto."
-    >
-      <span className="text-sm">{effective === "mobile" ? "📱" : "🖥️"}</span>
-      <span>{label}</span>
-    </button>
-  );
+  const options = [
+    { value:"auto", label:`Auto (${autoIsMobile ? "móvil" : "web"})`, icon:"⚙️" },
+    { value:"desktop", label:"Forzar web", icon:"🖥️" },
+    { value:"mobile", label:"Forzar móvil", icon:"📱" },
+  ];
+  if (embedded) {
+    return (
+      <div className="grid gap-2 sm:grid-cols-3">
+        {options.map(opt => {
+          const active = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setMode(opt.value)}
+              className={`rounded-2xl border px-4 py-3 text-left transition-all ${active ? "border-sky-500 bg-sky-600/15 text-sky-200 shadow-lg shadow-sky-950/30" : "border-slate-800 bg-slate-900/50 text-slate-400 hover:border-slate-600 hover:text-slate-200"}`}
+            >
+              <div className="text-lg">{opt.icon}</div>
+              <div className="mt-1 text-xs font-black">{opt.label}</div>
+              <div className="mt-1 text-[10px] text-slate-500">{opt.value === "auto" ? "Detecta celular/escritorio sin molestar." : opt.value === "desktop" ? "Útil si quieres ver la versión completa." : "Útil para probar modo app."}</div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  return null;
 };
 
 
@@ -3305,7 +3319,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6 · Tratancia autoadjudicada</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.1 · Tratancia corregida</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3464,7 +3478,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
       <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6 · Tratancia autoadjudicada</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.1 · Tratancia corregida</div>
             <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
             <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
           </div>
@@ -3578,8 +3592,28 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
   const patFiles  = FILES.filter(f => f.patient === patient.id);
   const patNotes  = getPatientNotes(patient.id);
-  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const currentProfessionalId = membership?.professionalId || null;
   const canEditPatient = canEditPatientInCurrentWorkspace(patient);
+  const isTreating = isAdmin || (currentProfessionalId && getPatientTeamIds(patient).includes(currentProfessionalId));
+  const canSelfTakeTreatment = USING_SUPABASE_DATA && Boolean(currentProfessionalId) && !isAdmin && !isTreating;
+  const [quickTreating, setQuickTreating] = useState(false);
+  const [quickTreatError, setQuickTreatError] = useState("");
+  const handleQuickTakeTreatment = async () => {
+    setQuickTreating(true);
+    setQuickTreatError("");
+    try {
+      await takePatientTreatmentInSupabase({ patient, teamRole: roleToDefaultTeamRole(membership?.role), isPrimary: false, authSession });
+      await onDataChanged?.();
+      setTab("equipo");
+    } catch (err) {
+      console.error(err);
+      setQuickTreatError(err?.message || "No se pudo tomar tratancia del paciente.");
+    } finally {
+      setQuickTreating(false);
+    }
+  };
 
   const TABS = [
     { id:"resumen",     label:"Resumen" },
@@ -3621,7 +3655,19 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                   </button>
                 )}
                 {onEdit && !canEditPatient && (
-                  <span className="rounded-full border border-slate-700 bg-slate-900/50 px-3 py-1 text-[10px] font-black text-slate-400">Solo lectura · toma tratancia para editar</span>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <span className="rounded-full border border-slate-700 bg-slate-900/50 px-3 py-1 text-[10px] font-black text-slate-400">Solo lectura</span>
+                    {canSelfTakeTreatment && (
+                      <button
+                        type="button"
+                        disabled={quickTreating}
+                        onClick={handleQuickTakeTreatment}
+                        className="rounded-full border border-emerald-600 bg-emerald-600/20 px-3 py-1 text-xs font-black text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50"
+                      >
+                        {quickTreating ? "Tomando…" : "Tomar tratancia"}
+                      </button>
+                    )}
+                  </div>
                 )}
                 {USING_SUPABASE_DATA && onSafetyAction && canEditPatient && (
                   <button
@@ -3647,9 +3693,10 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
           </div>
           <div className="text-sm text-slate-200 font-medium mb-2">{patient.dx_main}</div>
           <Disclaimer />
+          {quickTreatError && <div className="mt-2 rounded-xl border border-red-800 bg-red-950/30 p-2 text-xs text-red-200">{quickTreatError}</div>}
         </div>
         {/* Tabs */}
-        <div className="border-b border-slate-800 flex overflow-x-auto bg-[#0d1117] px-4 gap-1">
+        <div className="sticky top-0 z-20 border-b border-slate-800 flex overflow-x-auto bg-[#0d1117]/95 px-4 gap-1 backdrop-blur">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors
@@ -5720,7 +5767,7 @@ const PatientLocationCategoriesPanel = ({ activeInstitution, onDataChanged }) =>
   );
 };
 
-const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, activeUser, setActiveUser, authSession, onDataChanged }) => (
+const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, viewMode, setViewMode, autoIsMobile, activeUser, setActiveUser, authSession, onDataChanged }) => (
   <div className="space-y-5 max-w-5xl">
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
       <div className="text-slate-300 font-semibold text-sm mb-4">Espacios institucionales</div>
@@ -5733,6 +5780,13 @@ const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode,
     <ProfessionalsAdminPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <PatientLocationCategoriesPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <UserAccessAdminPanel authSession={authSession} activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4">
+        <div className="text-slate-300 font-semibold text-sm">Visualización web/móvil</div>
+        <div className="mt-1 text-xs text-slate-500">El botón flotante se eliminó para no tapar la ficha. Déjalo en Auto salvo que quieras forzar una vista.</div>
+      </div>
+      <ViewModeToggle mode={viewMode} setMode={setViewMode} autoIsMobile={autoIsMobile} embedded />
+    </div>
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -5961,7 +6015,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
-      // v2.6 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // v2.6.1 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
       // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
       const storedTheme = getStoredThemeForUser(authSession?.user?.id);
       const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
@@ -6042,7 +6096,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       {page === "trazabilidad"   && <TrazabilidadView />}
       {page === "estadisticas"   && <EstadisticasView />}
       {page === "inbox"          && <InboxView />}
-      {page === "configuracion"  && <ConfiguracionView activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} themeMode={themeMode} setThemeMode={setThemeMode} activeUser={activeUser} setActiveUser={setActiveUser} authSession={authSession} onDataChanged={refreshWorkspaceData} />}
+      {page === "configuracion"  && <ConfiguracionView activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} themeMode={themeMode} setThemeMode={setThemeMode} viewMode={viewMode} setViewMode={setViewMode} autoIsMobile={autoIsMobile} activeUser={activeUser} setActiveUser={setActiveUser} authSession={authSession} onDataChanged={refreshWorkspaceData} />}
     </div>
   );
 
@@ -6136,8 +6190,6 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
           .mobile-shell .fixed.inset-0 > div { width: 100vw !important; max-width: 100vw !important; }
         }
       `}</style>
-
-      <ViewModeToggle mode={viewMode} setMode={setViewMode} autoIsMobile={autoIsMobile} />
 
       {isMobileView ? (
         <>
