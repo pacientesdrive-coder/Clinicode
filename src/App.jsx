@@ -530,19 +530,41 @@ const ADMIN_USER = {
   color: "bg-slate-600",
 };
 const CARE_TEAM_FIELDS = ["doctor", "psychologist", "ot", "nurse", "social"];
-const getPatientTeamIds = (patient) => CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
+const getPatientTeamIds = (patient) => {
+  const compact = CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
+  const expanded = (patient?.teamMembers || []).map(m => m.professional_id).filter(Boolean);
+  return Array.from(new Set([...compact, ...expanded]));
+};
 const getCurrentUser = () => ACTIVE_USER_ID === "admin" ? ADMIN_USER : RAW_PROFESSIONALS.find(p => p.id === ACTIVE_USER_ID) || ADMIN_USER;
 const getUserOptions = () => [ADMIN_USER, ...RAW_PROFESSIONALS.filter(p => p.institution === ACTIVE_INSTITUTION_ID)];
+const getCurrentMembership = () => getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+const getCurrentProfessionalId = () => getCurrentMembership()?.professionalId || (ACTIVE_USER_ID !== "admin" ? ACTIVE_USER_ID : null);
+const isCurrentInstitutionAdmin = () => ACTIVE_USER_ID === "admin" || getCurrentMembership()?.role === "admin";
 const canAccessPatient = (patient) => Boolean(patient) && patient.institution === ACTIVE_INSTITUTION_ID && (
-  ACTIVE_USER_ID === "admin" || getPatientTeamIds(patient).includes(ACTIVE_USER_ID)
+  isCurrentInstitutionAdmin() || Boolean(getCurrentMembership()) || ACTIVE_USER_ID === "admin"
+);
+const canEditPatientInCurrentWorkspace = (patient) => Boolean(patient) && patient.institution === ACTIVE_INSTITUTION_ID && (
+  isCurrentInstitutionAdmin() || getPatientTeamIds(patient).includes(getCurrentProfessionalId())
 );
 const getVisiblePatientIds = () => new Set(RAW_PATIENTS.filter(canAccessPatient).map(p => p.id));
 const canAccessProfessional = (prof) => {
   if (!prof || prof.institution !== ACTIVE_INSTITUTION_ID) return false;
-  if (ACTIVE_USER_ID === "admin" || prof.id === ACTIVE_USER_ID) return true;
-  return RAW_PATIENTS.some(patient => canAccessPatient(patient) && getPatientTeamIds(patient).includes(prof.id));
+  return isCurrentInstitutionAdmin() || Boolean(getCurrentMembership()) || prof.id === ACTIVE_USER_ID;
 };
 const canAccessPatientLinkedItem = (item) => item?.institution === ACTIVE_INSTITUTION_ID && getVisiblePatientIds().has(item.patient);
+const roleToDefaultTeamRole = (role) => {
+  if (["psiquiatra", "psiquiatra_jefe"].includes(role)) return "psiquiatra";
+  if (role === "medico_general") return "medico";
+  if (role === "psicologo") return "psicologo";
+  if (role === "terapeuta_ocupacional" || role === "terapeuta") return "terapeuta_ocupacional";
+  if (role === "enfermero") return "enfermero";
+  if (role === "trabajador_social") return "trabajador_social";
+  if (role === "tens") return "tens";
+  if (role === "fonoaudiologo") return "fonoaudiologo";
+  if (role === "nutricionista") return "nutricionista";
+  if (role === "kinesiologo") return "kinesiologo";
+  return "otro";
+};
 
 const PROFESSIONALS = createScopedCollection(RAW_PROFESSIONALS, canAccessProfessional);
 const PATIENTS = createScopedCollection(RAW_PATIENTS, canAccessPatient);
@@ -1814,6 +1836,30 @@ const insertTraceEvent = async ({ institutionId, patientId, authSession, action,
   });
 };
 
+
+const takePatientTreatmentInSupabase = async ({ patient, teamRole, isPrimary, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const { error } = await supabase.rpc("clincoord_take_patient_care", {
+    p_patient_id: patient._dbId,
+    p_team_role: teamRole || roleToDefaultTeamRole(getCurrentMembership()?.role),
+    p_is_primary: Boolean(isPrimary),
+  });
+  if (error) throw error;
+};
+
+const leavePatientTreatmentInSupabase = async ({ patient, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const { error } = await supabase.rpc("clincoord_leave_patient_care", {
+    p_patient_id: patient._dbId,
+    p_team_role: teamRole || null,
+  });
+  if (error) throw error;
+};
+
 const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy = false) => {
   const rut = normalizeRutValue(form.rut || form.clinical_code);
   const fullName = String(form.full_name || form.initials || "").trim();
@@ -2036,6 +2082,9 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   }
 
   if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  if (!isAdmin && !getPatientTeamIds(patient).includes(dbProfile.professional_id)) {
+    throw new Error("Puedes ver este paciente por pertenecer a la institución, pero para modificarlo debes tomar tratancia primero.");
+  }
   const { error } = await supabase
     .from("patients")
     .update(payload)
@@ -2230,7 +2279,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
       <form onSubmit={submit} className="my-4 w-full max-w-4xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/50" onClick={e => e.stopPropagation()}>
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-800 bg-[#131920]/95 p-5 backdrop-blur">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.5 · Identificación y contacto</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6 · Identificación y contacto</div>
             <h2 className="mt-1 text-xl font-black text-white">{mode === "create" ? "Nuevo paciente" : `Editar ${patient?.id}`}</h2>
             <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. Cualquier profesional aprobado puede crear pacientes; el RUT evita duplicados y el equipo tratante controla accesos posteriores.</p>
           </div>
@@ -3256,7 +3305,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.5 · Equipo tratante avanzado</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6 · Tratancia autoadjudicada</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3316,9 +3365,12 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
 };
 
 const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
-  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const currentProfessionalId = membership?.professionalId || null;
   const [professionalId, setProfessionalId] = useState("");
   const [teamRole, setTeamRole] = useState("psiquiatra");
+  const [selfTeamRole, setSelfTeamRole] = useState(roleToDefaultTeamRole(membership?.role));
   const [isPrimary, setIsPrimary] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -3328,6 +3380,38 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
   });
   const assignedKeys = new Set(teamMembers.map(m => `${m.professional_id}:${m.team_role}`));
   const professionalOptions = getAssignableProfessionals();
+  const selfMemberships = teamMembers.filter(m => m.professional_id === currentProfessionalId);
+  const isTreating = selfMemberships.length > 0 || isAdmin;
+  const canSelfManage = USING_SUPABASE_DATA && Boolean(currentProfessionalId) && !isAdmin;
+
+  const takeSelfTreatment = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await takePatientTreatmentInSupabase({ patient, teamRole: selfTeamRole, isPrimary: false, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo tomar tratancia del paciente.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const leaveSelfTreatment = async (member = null) => {
+    if (!window.confirm("¿Dejar tu tratancia de este paciente? Podrás seguir viéndolo si perteneces a la institución, pero no editarlo.")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await leavePatientTreatmentInSupabase({ patient, teamRole: member?.team_role || null, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo dejar la tratancia.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -3380,12 +3464,41 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
       <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.5 · Equipo tratante avanzado</div>
-            <h3 className="mt-1 text-base font-black text-white">Equipo tratante del caso</h3>
-            <p className="mt-1 text-xs text-slate-500">Estos integrantes determinan visibilidad del caso y responsabilidad clínica dentro de la institución activa.</p>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6 · Tratancia autoadjudicada</div>
+            <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
+            <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
           </div>
-          {!isAdmin && <span className="rounded-full border border-amber-700 bg-amber-950/30 px-3 py-1 text-[10px] font-black text-amber-300">Solo lectura</span>}
+          {!isAdmin && <span className={`rounded-full border px-3 py-1 text-[10px] font-black ${isTreating ? "border-emerald-700 bg-emerald-950/30 text-emerald-300" : "border-amber-700 bg-amber-950/30 text-amber-300"}`}>{isTreating ? "Eres tratante" : "Solo lectura"}</span>}
         </div>
+
+        {canSelfManage && (
+          <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-black text-slate-100">Mi tratancia</div>
+                <div className="text-[11px] text-slate-500">Puedes tomar o dejar la tratancia sin esperar asignación de jefatura. Todo queda en trazabilidad.</div>
+              </div>
+              {isTreating ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {selfMemberships.map(m => (
+                    <button key={`${m.professional_id}:${m.team_role}`} disabled={saving} onClick={() => leaveSelfTreatment(m)} className="rounded-full border border-red-800 bg-red-950/20 px-3 py-1.5 text-xs font-black text-red-300 hover:bg-red-900/30 disabled:opacity-50">
+                      Dejar tratancia · {getTeamRoleLabel(m.team_role)}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <select value={selfTeamRole} onChange={e => setSelfTeamRole(e.target.value)} className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-200 outline-none focus:border-sky-500">
+                    {TEAM_ROLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                  </select>
+                  <button disabled={saving} onClick={takeSelfTreatment} className="rounded-full border border-emerald-600 bg-emerald-600/20 px-3 py-1.5 text-xs font-black text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50">
+                    Tomar tratancia
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {error && <div className="mt-3 rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
 
@@ -3419,7 +3532,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
 
       {isAdmin && (
         <form onSubmit={submit} className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
-          <div className="mb-3 text-sm font-black text-slate-100">Agregar integrante</div>
+          <div className="mb-3 text-sm font-black text-slate-100">Agregar o reasignar integrante como admin</div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div>
               <FieldLabel>Profesional</FieldLabel>
@@ -3466,6 +3579,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   const patFiles  = FILES.filter(f => f.patient === patient.id);
   const patNotes  = getPatientNotes(patient.id);
   const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const canEditPatient = canEditPatientInCurrentWorkspace(patient);
 
   const TABS = [
     { id:"resumen",     label:"Resumen" },
@@ -3498,7 +3612,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="flex items-center gap-2">
-                {onEdit && (
+                {onEdit && canEditPatient && (
                   <button
                     onClick={() => onEdit(patient)}
                     className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-800/50"
@@ -3506,7 +3620,10 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                     Editar
                   </button>
                 )}
-                {USING_SUPABASE_DATA && onSafetyAction && (
+                {onEdit && !canEditPatient && (
+                  <span className="rounded-full border border-slate-700 bg-slate-900/50 px-3 py-1 text-[10px] font-black text-slate-400">Solo lectura · toma tratancia para editar</span>
+                )}
+                {USING_SUPABASE_DATA && onSafetyAction && canEditPatient && (
                   <button
                     onClick={() => onSafetyAction("archive", patient)}
                     className="rounded-full border border-amber-700 bg-amber-900/30 px-3 py-1 text-xs font-black text-amber-300 hover:bg-amber-800/50"
@@ -3983,7 +4100,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
         <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""} · {PATIENTS.length} en esta institución</div>
         {USING_SUPABASE_DATA && (
           <div className="text-[10px] text-slate-500">
-            {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes crear pacientes y editar casos asignados. La reasignación de equipo queda para admin."}
+            {isAdmin ? "Puedes crear, editar y gestionar tratancias." : "Puedes ver todos los pacientes de la institución. Para editar, toma tratancia del caso."}
           </div>
         )}
       </div>
@@ -5844,7 +5961,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
-      // v2.5 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // v2.6 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
       // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
       const storedTheme = getStoredThemeForUser(authSession?.user?.id);
       const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
