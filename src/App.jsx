@@ -535,6 +535,18 @@ const getPatientTeamIds = (patient) => {
   const expanded = (patient?.teamMembers || []).map(m => m.professional_id).filter(Boolean);
   return Array.from(new Set([...compact, ...expanded]));
 };
+
+// v2.6.2: para las tarjetas se muestran todos los tratantes reales del caso,
+// no solo el profesional principal. Así, si PD era principal y SA toma
+// tratancia después, ambos aparecen en la tarjeta sin esperar reasignación.
+const getPatientTeamDisplayIds = (patient, limit = 6) => {
+  const expandedRows = [...(patient?.teamMembers || [])]
+    .filter(m => m?.professional_id && getProf(m.professional_id))
+    .sort((a, b) => Number(Boolean(b.is_primary)) - Number(Boolean(a.is_primary)) || String(a.team_role || '').localeCompare(String(b.team_role || '')));
+  const expanded = expandedRows.map(m => m.professional_id);
+  const compact = CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
+  return Array.from(new Set([...expanded, ...compact])).slice(0, limit);
+};
 const getCurrentUser = () => ACTIVE_USER_ID === "admin" ? ADMIN_USER : RAW_PROFESSIONALS.find(p => p.id === ACTIVE_USER_ID) || ADMIN_USER;
 const getUserOptions = () => [ADMIN_USER, ...RAW_PROFESSIONALS.filter(p => p.institution === ACTIVE_INSTITUTION_ID)];
 const getCurrentMembership = () => getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
@@ -1498,7 +1510,7 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v2.6.1</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.6.2</div>
     </div>
   </header>
 );
@@ -2958,13 +2970,20 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
             </span>
           )}
         </div>
-        <div className="border-t border-slate-700/60 pt-2.5 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            {[patient.doctor, patient.psychologist, patient.ot, patient.nurse, patient.social].filter(Boolean).slice(0,4).map((pid,i) => (
-              <ProfAvatar key={i} id={pid} />
-            ))}
+        <div className="border-t border-slate-700/60 pt-2.5 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-600">Tratantes visibles</div>
+            <div className="flex items-center gap-1.5">
+              {getPatientTeamDisplayIds(patient, 6).map((pid,i) => (
+                <ProfAvatar key={`${pid}-${i}`} id={pid} />
+              ))}
+              {getPatientTeamIds(patient).length > 6 && (
+                <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 text-[10px] font-black text-slate-400">+{getPatientTeamIds(patient).length - 6}</span>
+              )}
+              {getPatientTeamIds(patient).length === 0 && <span className="text-[10px] text-slate-600">Sin tratantes</span>}
+            </div>
           </div>
-          <div className="text-[10px] text-slate-500">
+          <div className="shrink-0 text-right text-[10px] text-slate-500">
             {patient.next_control ? <>⏱ {patient.next_control}</> : <span className="text-orange-400">Sin próximo control</span>}
           </div>
         </div>
@@ -3319,7 +3338,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.1 · Tratancia corregida</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.2 · Tratancia corregida</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3478,7 +3497,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
       <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.1 · Tratancia corregida</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.2 · Tratancia corregida</div>
             <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
             <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
           </div>
@@ -3628,8 +3647,8 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-end" onClick={onClose}>
-      <div className="w-full max-w-2xl h-screen bg-[#0d1117] overflow-y-auto flex flex-col border-l border-slate-700 shadow-2xl"
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
+      <div className="h-[calc(100vh-2rem)] w-[min(1500px,calc(100vw-2rem))] max-w-none overflow-y-auto rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70 flex flex-col"
         onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className={`border-b ${rc.border} border-opacity-50 p-5 bg-[#131920]`}>
@@ -6015,7 +6034,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
-      // v2.6.1 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // v2.6.2 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
       // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
       const storedTheme = getStoredThemeForUser(authSession?.user?.id);
       const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
@@ -6181,7 +6200,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         .mobile-shell table { min-width: 680px; }
         .mobile-shell [class*="h-[70vh]"] { height: auto !important; min-height: 70vh; }
         .mobile-shell [class*="w-64"] { width: 100% !important; }
-        .mobile-shell [class*="max-w-2xl"] { max-width: 430px !important; }
+        .mobile-shell [class*="max-w-none"] { max-width: 100vw !important; }
         .mobile-shell .fixed.inset-0 { align-items: stretch !important; justify-content: center !important; }
         .mobile-shell .fixed.inset-0 > div { width: min(100vw, 430px) !important; border-left: 0 !important; }
         .mobile-shell main { padding: 0.85rem 0.85rem 6.75rem; }
