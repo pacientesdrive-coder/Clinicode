@@ -42,6 +42,16 @@ const CLINICAL_FILE_CATEGORIES = [
   { id:"imagen", label:"Imagen" },
   { id:"otro", label:"Otro" },
 ];
+const CLINICAL_NOTE_TYPES = [
+  { id:"evolucion", label:"Evolución / comentario", icon:"✍️" },
+  { id:"gestion", label:"Gestión clínica", icon:"📌" },
+  { id:"riesgo", label:"Riesgo / seguridad", icon:"⚠️" },
+  { id:"familia", label:"Familia / red", icon:"👥" },
+  { id:"farmaco", label:"Fármacos", icon:"💊" },
+  { id:"administrativo", label:"Administrativo", icon:"🗂️" },
+];
+const getClinicalNoteType = (type) => CLINICAL_NOTE_TYPES.find(t => t.id === type) || CLINICAL_NOTE_TYPES[0];
+
 const getFileCategoryLabel = (category) => CLINICAL_FILE_CATEGORIES.find(c => c.id === category)?.label || "Archivo";
 const formatBytes = (bytes) => {
   const n = Number(bytes || 0);
@@ -148,6 +158,11 @@ const getAppUserIdForWorkspace = (workspaceId, fallback = "admin") => {
   return membership.role === "admin" ? "admin" : (membership.professionalId || fallback);
 };
 const normalizeRoleForApp = (role) => role === "terapeuta_ocupacional" ? "terapeuta" : role;
+const makeDisplayInitials = (nameOrEmail) => {
+  const base = String(nameOrEmail || "Usuario").replace(/@.*$/, "").trim();
+  const parts = base.split(/[\s._-]+/).filter(Boolean);
+  return (parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : base.slice(0, 2)).toUpperCase();
+};
 
 
 // ─── LOGIN REAL / MAPEO DE USUARIOS ───────────────────────────────────────
@@ -392,6 +407,10 @@ const RAW_FILES = [
   { id:"f5", name:"Registro_contacto_004.pdf",    size:"0.3 MB", date:"2024-09-28", author:"p8", patient:"PAC-004", type:"pdf" },
 ];
 
+const RAW_PATIENT_NOTES = [
+  { id:"pn1", patient:"PAC-001", author:"p1", authorName:"Dra. Valentina Rojas", type:"gestion", body:"Nota demo: revisar adherencia, red de apoyo y coordinación de control próximo.", createdAt:"2024-10-01 10:30", pinned:false },
+];
+
 
 // ─── ASIGNACIÓN MOCK POR INSTITUCIÓN ──────────────────────────────────────
 // En una versión con backend, este campo debería venir de la tabla institution_id
@@ -527,6 +546,7 @@ const ALERTS = createScopedCollection(RAW_ALERTS, canAccessPatientLinkedItem);
 const TRACE_EVENTS = createScopedCollection(RAW_TRACE_EVENTS, canAccessPatientLinkedItem);
 const MESSAGES = createScopedCollection(RAW_MESSAGES, canAccessPatientLinkedItem);
 const FILES = createScopedCollection(RAW_FILES, canAccessPatientLinkedItem);
+const PATIENT_NOTES = createScopedCollection(RAW_PATIENT_NOTES, canAccessPatientLinkedItem);
 
 const DEMO_TODAY = new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, days) => {
@@ -606,6 +626,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     traceRes,
     messagesRes,
     filesRes,
+    patientNotesRes,
   ] = await Promise.all([
     supabase.from("institutions").select("*"),
     supabase.from("professionals").select("*").order("full_name"),
@@ -618,9 +639,10 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     supabase.from("trace_events").select("*").order("created_at", { ascending: false }),
     supabase.from("messages").select("*").order("created_at", { ascending: false }),
     supabase.from("files").select("*").order("created_at", { ascending: false }),
+    supabase.from("patient_notes").select("*").order("created_at", { ascending: false }),
   ]);
 
-  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes];
+  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes];
   const firstError = responses.find(r => r.error)?.error;
   if (firstError) throw firstError;
 
@@ -635,6 +657,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const traceDb = traceRes.data || [];
   const messagesDb = messagesRes.data || [];
   const filesDb = filesRes.data || [];
+  const patientNotesDb = patientNotesRes.data || [];
 
   const institutionById = new Map(institutions.map(i => [i.id, i]));
   membershipsDb.forEach(m => {
@@ -886,6 +909,24 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     storagePath: file.storage_path || "",
   }));
 
+  const professionalNameById = new Map(professionalsDb.map(pr => [pr.id, pr.full_name]));
+  const noteRows = patientNotesDb.map(note => ({
+    id: note.id,
+    _dbId: note.id,
+    institution: mapInstitutionFromDb(note.institution_id, institutionById),
+    institutionDbId: note.institution_id,
+    patient: patientCodeByUuid.get(note.patient_id) || null,
+    patientDbId: note.patient_id,
+    author: note.author_professional_id || note.author_profile_id,
+    authorName: professionalNameById.get(note.author_professional_id) || profile.full_name || profile.email || "Usuario",
+    profileAuthor: note.author_profile_id,
+    type: note.note_type || "evolucion",
+    body: note.body || "",
+    pinned: Boolean(note.pinned),
+    createdAt: (note.created_at || "").replace("T", " ").slice(0, 16),
+    updatedAt: note.updated_at,
+  }));
+
   replaceCollection(RAW_PROFESSIONALS, professionalRows);
   replaceCollection(RAW_PATIENTS, patientRows);
   replaceCollection(RAW_MEDICATIONS, medicationRows);
@@ -893,6 +934,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   replaceCollection(RAW_TRACE_EVENTS, traceRows);
   replaceCollection(RAW_MESSAGES, messageRows);
   replaceCollection(RAW_FILES, fileRows);
+  replaceCollection(RAW_PATIENT_NOTES, noteRows);
   USING_SUPABASE_DATA = true;
 
   const defaultMembership = membershipRows.find(m => m.isDefault) || membershipRows[0];
@@ -1295,43 +1337,49 @@ const getNavItems = () => ([
   { id:"configuracion",   label:"Configuración",          icon:"⊙" },
 ]);
 
-const Sidebar = ({ active, setActive }) => (
-  <aside className="w-56 bg-[#0d1117] border-r border-slate-800 flex flex-col h-screen sticky top-0 flex-shrink-0">
-    <div className="px-4 py-5 border-b border-slate-800">
-      <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 bg-sky-600 rounded-lg flex items-center justify-center text-white font-black text-sm">CC</div>
-        <div>
-          <div className="text-white font-bold text-sm leading-none">ClinCoord</div>
-          <div className="text-slate-500 text-[10px] font-medium tracking-wider uppercase">Mental Health</div>
+const Sidebar = ({ active, setActive, authProfile }) => {
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const displayName = membership?.professionalName || authProfile?.label || authProfile?.email || "Usuario";
+  const displayRole = membership?.role ? (ROLE_LABELS[normalizeRoleForApp(membership.role)] || membership.role) : "Usuario clínico";
+  const initials = makeDisplayInitials(displayName);
+  return (
+    <aside className="w-56 bg-[#0d1117] border-r border-slate-800 flex flex-col h-screen sticky top-0 flex-shrink-0">
+      <div className="px-4 py-5 border-b border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-sky-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-lg shadow-sky-950/40">CC</div>
+          <div>
+            <div className="text-white font-bold text-sm leading-none">ClinCoord</div>
+            <div className="text-slate-500 text-[10px] font-medium tracking-wider uppercase">Mental Health</div>
+          </div>
         </div>
       </div>
-    </div>
-    <nav className="flex-1 py-3 overflow-y-auto">
-      {getNavItems().map(item => (
-        <button key={item.id} onClick={() => setActive(item.id)}
-          className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative
-            ${active === item.id
-              ? "bg-sky-600/10 text-sky-400 border-r-2 border-sky-400"
-              : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"}`}>
-          <span className="text-base w-4 text-center flex-shrink-0">{item.icon}</span>
-          <span className="font-medium">{item.label}</span>
-          {item.badge > 0 && (
-            <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{item.badge}</span>
-          )}
-        </button>
-      ))}
-    </nav>
-    <div className="p-3 border-t border-slate-800">
-      <div className="flex items-center gap-2">
-        <div className="w-7 h-7 bg-violet-600 rounded-full flex items-center justify-center text-white text-xs font-bold">VR</div>
-        <div className="min-w-0">
-          <div className="text-xs text-white font-medium truncate">Dra. V. Rojas</div>
-          <div className="text-[10px] text-slate-500">Psiquiatra Jefe</div>
+      <nav className="flex-1 py-3 overflow-y-auto">
+        {getNavItems().map(item => (
+          <button key={item.id} onClick={() => setActive(item.id)}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative
+              ${active === item.id
+                ? "bg-sky-600/10 text-sky-400 border-r-2 border-sky-400"
+                : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"}`}>
+            <span className="text-base w-4 text-center flex-shrink-0">{item.icon}</span>
+            <span className="font-medium">{item.label}</span>
+            {item.badge > 0 && (
+              <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{item.badge}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-slate-800">
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 p-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-sky-500 to-violet-600 rounded-full flex items-center justify-center text-white text-xs font-black shadow-lg shadow-sky-950/40">{initials}</div>
+          <div className="min-w-0">
+            <div className="text-xs text-white font-black truncate">{displayName}</div>
+            <div className="text-[10px] text-slate-500 truncate">{displayRole}</div>
+          </div>
         </div>
       </div>
-    </div>
-  </aside>
-);
+    </aside>
+  );
+};
 
 // ─── TOPBAR ────────────────────────────────────────────────────────────────
 const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser, authLocked = false, authEmail, onLogout }) => (
@@ -1348,7 +1396,7 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v2.0-AUTO</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.2.1</div>
     </div>
   </header>
 );
@@ -2391,6 +2439,35 @@ const ClinicalProgramModal = ({ type, row, authSession, onClose, onSaved }) => {
   );
 };
 
+// ─── NOTAS CLÍNICAS / COMENTARIOS DE TARJETA ─────────────────────────────
+const getPatientNotes = (patientCode) => PATIENT_NOTES
+  .filter(n => n.patient === patientCode)
+  .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
+const getLatestPatientNote = (patientCode) => getPatientNotes(patientCode)[0] || null;
+
+const savePatientNoteToSupabase = async ({ patient, body, noteType, authSession }) => {
+  const text = String(body || "").trim();
+  if (!text) throw new Error("Escribe un comentario antes de guardar.");
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId) {
+    throw new Error("Las notas clínicas requieren Supabase y un paciente guardado en la base de datos.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+
+  const { error } = await supabase.from("patient_notes").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    author_profile_id: authSession.user.id,
+    author_professional_id: membership?.professionalId || null,
+    note_type: noteType || "evolucion",
+    body: text,
+    pinned: false,
+  });
+  if (error) throw error;
+};
+
 // ─── PATIENT CARD ──────────────────────────────────────────────────────────
 const getPatientDxTags = (patient) => {
   const dxParts = [patient?.dx_main, ...(Array.isArray(patient?.dx_secondary) ? patient.dx_secondary : [])];
@@ -2417,12 +2494,13 @@ const patientSearchHaystack = (p) => {
     .join(" ");
   const alerts = ALERTS.filter(a => a.patient === p.id).map(a => `${a.title} ${a.comment} ${a.priority} ${a.status}`).join(" ");
   const meds = (p.meds || []).map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean).map(m => `${m.drug} ${m.dose} ${m.scheme} ${m.followup}`).join(" ");
+  const noteText = getPatientNotes(p.id).map(n => `${n.body} ${getClinicalNoteType(n.type).label} ${n.authorName}`).join(" ");
   const cloz = CLOZAPINE_TRACKING[p.id] ? "clozapina hemograma programa" : "";
   const lai = DEPOT_TRACKING[p.id] ? "inyectable deposito lai depot" : "";
   return normalizeText([
     p.id, p.initials, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
     p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
-    p.support, p.notes, p.next_control, teamNames, alerts, meds, cloz, lai,
+    p.support, p.notes, noteText, p.next_control, teamNames, alerts, meds, cloz, lai,
     ...getPatientDxTags(p).map(t => t.label),
   ].join(" "));
 };
@@ -2442,6 +2520,7 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
   const rc = getRiskCfg(patient.risk);
   const dxTags = getPatientDxTags(patient);
   const ringStyle = getDxRingStyle(patient);
+  const latestNote = getLatestPatientNote(patient.id);
   if (compact) {
     return (
       <div onClick={() => onClick(patient)} style={ringStyle}
@@ -2458,6 +2537,7 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
               {(patient.dx_secondary?.length || 0) > 4 && <span className="text-[9px] text-slate-500">+{patient.dx_secondary.length - 4}</span>}
             </div>
           </div>
+          {latestNote && <div className="hidden max-w-[220px] truncate rounded-full border border-sky-800/70 bg-sky-950/30 px-2 py-1 text-[10px] text-sky-200 md:block">✍ {latestNote.body}</div>}
           <RiskBadge risk={patient.risk} small />
           <StatusBadge status={patient.status} />
           <div className="hidden w-28 text-right text-[10px] text-slate-500 sm:block">{patient.next_control || "Sin control"}</div>
@@ -2467,7 +2547,7 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
   }
   return (
     <div onClick={() => onClick(patient)} style={ringStyle}
-      className={`bg-[#131920] border ${rc.border} rounded-xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-lg hover:shadow-black/30 group relative overflow-hidden`}> 
+      className={`bg-gradient-to-br from-slate-900/95 via-[#131920] to-slate-950/95 border ${rc.border} rounded-3xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-2xl hover:shadow-sky-950/20 group relative overflow-hidden`}> 
       <div className={`absolute inset-0 opacity-5 ${rc.bg}`}></div>
       <div className="relative">
         <div className="flex items-start justify-between mb-2.5">
@@ -2488,6 +2568,15 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
           ))}
           {(patient.dx_secondary?.length || 0) > 6 && <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">+{patient.dx_secondary.length - 6} dx</span>}
         </div>
+        {latestNote && (
+          <div className="mb-3 rounded-2xl border border-sky-800/60 bg-sky-950/20 p-2.5 text-[11px] leading-relaxed text-sky-100 shadow-inner shadow-sky-950/30">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[9px] font-black uppercase tracking-wider text-sky-400">
+              <span>✍ Última nota</span>
+              <span className="font-mono text-slate-500">{latestNote.createdAt}</span>
+            </div>
+            <div className="line-clamp-2">{latestNote.body}</div>
+          </div>
+        )}
         <div className="flex items-center gap-2 mb-3">
           {patient.alerts > 0 && (
             <span className="flex items-center gap-1 text-red-400 text-[10px] font-semibold bg-red-900/20 px-1.5 py-0.5 rounded border border-red-800">
@@ -2760,6 +2849,78 @@ const ClinicalFilesView = ({ authSession, onDataChanged }) => {
   );
 };
 
+const ClinicalNotesPanel = ({ patient, notes = [], authSession, onDataChanged }) => {
+  const [body, setBody] = useState("");
+  const [noteType, setNoteType] = useState("evolucion");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setSaving(true);
+    try {
+      await savePatientNoteToSupabase({ patient, body, noteType, authSession });
+      setBody("");
+      setNoteType("evolucion");
+      setMessage("Comentario guardado en la tarjeta clínica.");
+      await onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar el comentario.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="rounded-3xl border border-sky-900/70 bg-gradient-to-br from-slate-900/90 to-sky-950/20 p-4 shadow-xl shadow-black/20">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-white">Escribir en tarjeta clínica</div>
+            <div className="text-xs text-slate-500">Comentarios breves, gestión, riesgo, red, fármacos o seguimiento.</div>
+          </div>
+          <select value={noteType} onChange={e => setNoteType(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs font-bold text-slate-200 outline-none focus:border-sky-500">
+            {CLINICAL_NOTE_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+          </select>
+        </div>
+        <textarea
+          value={body}
+          onChange={e => setBody(e.target.value)}
+          rows={5}
+          placeholder="Ej.: Se contacta a familiar. Paciente acepta control. Pendiente hemograma el viernes…"
+          className="w-full resize-y rounded-2xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-sm leading-relaxed text-slate-100 placeholder-slate-600 outline-none focus:border-sky-500"
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <div className={`text-xs ${message.includes("guardado") ? "text-emerald-400" : "text-amber-400"}`}>{message}</div>
+          <button disabled={saving || !body.trim()} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40">
+            {saving ? "Guardando…" : "Guardar comentario"}
+          </button>
+        </div>
+      </form>
+
+      <div className="space-y-3">
+        {notes.length === 0 && <div className="rounded-2xl border border-slate-800 bg-[#131920] p-4 text-sm text-slate-500">Sin comentarios clínicos todavía.</div>}
+        {notes.map(note => {
+          const type = getClinicalNoteType(note.type);
+          return (
+            <div key={note.id} className="rounded-3xl border border-slate-800 bg-[#131920] p-4 shadow-lg shadow-black/20">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-sky-800 bg-sky-950/30 px-2 py-1 text-[10px] font-black text-sky-300">{type.icon} {type.label}</span>
+                  <span className="text-xs font-bold text-slate-200">{note.authorName || getProf(note.author)?.name || "Usuario"}</span>
+                </div>
+                <span className="font-mono text-[10px] text-slate-500">{note.createdAt}</span>
+              </div>
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">{note.body}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSaved }) => {
   const isDelete = action === "delete";
   const [reason, setReason] = useState("");
@@ -2857,6 +3018,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   const patTrace  = TRACE_EVENTS.filter(t => t.patient === patient.id);
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
   const patFiles  = FILES.filter(f => f.patient === patient.id);
+  const patNotes  = getPatientNotes(patient.id);
   const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
   const TABS = [
@@ -2866,6 +3028,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
     { id:"alertas",     label:"Alertas" },
     { id:"equipo",      label:"Equipo" },
     { id:"archivos",    label:"Archivos" },
+    { id:"notas",       label:"Notas" },
     { id:"historial",   label:"Historial" },
     { id:"mensajes",    label:"Mensajes" },
   ];
@@ -2950,6 +3113,15 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                   </div>
                 ))}
               </div>
+              {patNotes[0] && (
+                <div className="rounded-3xl border border-sky-800/60 bg-sky-950/20 p-4 shadow-inner shadow-sky-950/30">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-[10px] text-sky-400 uppercase font-black tracking-wider">Último comentario clínico</div>
+                    <div className="font-mono text-[10px] text-slate-500">{patNotes[0].createdAt}</div>
+                  </div>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{patNotes[0].body}</p>
+                </div>
+              )}
               <div className="bg-[#131920] rounded-lg p-3 border border-slate-800">
                 <div className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider mb-2">Observaciones de gestión</div>
                 <p className="text-sm text-slate-300 leading-relaxed">{patient.notes}</p>
@@ -3075,6 +3247,14 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             <PatientFilesPanel
               patient={patient}
               files={patFiles}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
+          )}
+          {tab === "notas" && (
+            <ClinicalNotesPanel
+              patient={patient}
+              notes={patNotes}
               authSession={authSession}
               onDataChanged={onDataChanged}
             />
@@ -5159,6 +5339,8 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400&display=swap');
         * { box-sizing: border-box; }
+        body { background: radial-gradient(circle at top left, rgba(14,165,233,.12), transparent 34%), radial-gradient(circle at 80% 10%, rgba(139,92,246,.10), transparent 30%), #080d13; }
+        button, input, select, textarea { font-family: inherit; }
         .theme-nocturno, .theme-clinico, .theme-bosque, .theme-ambar, .theme-claro { background: var(--cc-shell) !important; color: var(--cc-text) !important; }
         .theme-nocturno [class*="bg-[#0d1117]"], .theme-nocturno [class*="bg-[#131920]"], .theme-clinico [class*="bg-[#0d1117]"], .theme-clinico [class*="bg-[#131920]"], .theme-bosque [class*="bg-[#0d1117]"], .theme-bosque [class*="bg-[#131920]"], .theme-ambar [class*="bg-[#0d1117]"], .theme-ambar [class*="bg-[#131920]"] { background-color: var(--cc-card) !important; }
         .theme-claro [class*="bg-[#0d1117]"], .theme-claro [class*="bg-[#131920]"], .theme-claro [class*="bg-[#1a2332]"] { background-color: #ffffff !important; }
@@ -5252,7 +5434,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         </>
       ) : (
         <>
-          <Sidebar active={page} setActive={setPage} />
+          <Sidebar active={page} setActive={setPage} authProfile={effectiveAuthProfile} />
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             <Topbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} authLocked={authLocked} authEmail={authSession?.user?.email} onLogout={onLogout} />
             <main className="flex-1 overflow-y-auto p-6">
