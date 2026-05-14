@@ -116,6 +116,7 @@ let ACTIVE_USER_ID = "admin";
 let USING_SUPABASE_DATA = false;
 let ACCESSIBLE_INSTITUTIONS = [...INSTITUTIONS];
 let ACTIVE_MEMBERSHIPS_BY_INSTITUTION = {};
+const PATIENT_LOCATION_CATEGORIES = [];
 
 const slugifyWorkspaceId = (value) => String(value || "")
   .trim()
@@ -587,6 +588,37 @@ const resetTrackingObject = (obj) => {
   Object.keys(obj).forEach(key => delete obj[key]);
 };
 
+const LOCATION_KIND_LABELS = { sector: "Sector", consultorio: "Consultorio" };
+const LOCATION_COLOR_OPTIONS = [
+  ["sky", "Azul"], ["violet", "Violeta"], ["emerald", "Verde"], ["amber", "Ámbar"],
+  ["rose", "Rosa"], ["cyan", "Cian"], ["orange", "Naranjo"], ["lime", "Lima"], ["slate", "Gris"], ["rainbow", "Arcoiris"]
+];
+const LOCATION_COLOR_STYLES = {
+  sky: "border-sky-700 bg-sky-950/30 text-sky-300",
+  violet: "border-violet-700 bg-violet-950/30 text-violet-300",
+  emerald: "border-emerald-700 bg-emerald-950/30 text-emerald-300",
+  amber: "border-amber-700 bg-amber-950/30 text-amber-300",
+  rose: "border-rose-700 bg-rose-950/30 text-rose-300",
+  cyan: "border-cyan-700 bg-cyan-950/30 text-cyan-300",
+  orange: "border-orange-700 bg-orange-950/30 text-orange-300",
+  lime: "border-lime-700 bg-lime-950/30 text-lime-300",
+  slate: "border-slate-700 bg-slate-900/60 text-slate-300",
+  rainbow: "border-fuchsia-600 bg-fuchsia-950/25 text-fuchsia-200",
+};
+const getPatientLocationCategories = (institution = ACTIVE_INSTITUTION_ID, kind = null, includeInactive = false) => PATIENT_LOCATION_CATEGORIES
+  .filter(c => c.institution === institution && (!kind || c.kind === kind) && (includeInactive || c.is_active !== false))
+  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.name).localeCompare(String(b.name)));
+const getLocationCategoryById = (id) => PATIENT_LOCATION_CATEGORIES.find(c => c.id === id || c._dbId === id) || null;
+const getPatientLocationLabel = (id) => getLocationCategoryById(id)?.name || "";
+const getPatientLocationColor = (id) => getLocationCategoryById(id)?.color || "slate";
+const LocationChip = ({ kind, id, fallback }) => {
+  const cat = getLocationCategoryById(id);
+  const label = cat?.name || fallback;
+  if (!label) return null;
+  const color = cat?.color || "slate";
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black ${LOCATION_COLOR_STYLES[color] || LOCATION_COLOR_STYLES.slate}`}>{kind === "sector" ? "📍" : "🏥"} {label}</span>;
+};
+
 const mapInstitutionFromDb = (institutionId, institutionById) => {
   const inst = institutionById.get(institutionId);
   return normalizeWorkspaceId(inst);
@@ -632,6 +664,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     messagesRes,
     filesRes,
     patientNotesRes,
+    patientLocationCategoriesRes,
   ] = await Promise.all([
     supabase.from("institutions").select("*"),
     supabase.from("professionals").select("*").order("full_name"),
@@ -645,9 +678,10 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     supabase.from("messages").select("*").order("created_at", { ascending: false }),
     supabase.from("files").select("*").order("created_at", { ascending: false }),
     supabase.from("patient_notes").select("*").order("created_at", { ascending: false }),
+    supabase.from("patient_location_categories").select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
   ]);
 
-  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes];
+  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes, patientLocationCategoriesRes];
   const firstError = responses.find(r => r.error)?.error;
   if (firstError) throw firstError;
 
@@ -663,6 +697,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const messagesDb = messagesRes.data || [];
   const filesDb = filesRes.data || [];
   const patientNotesDb = patientNotesRes.data || [];
+  const patientLocationCategoriesDb = patientLocationCategoriesRes.data || [];
 
   const institutionById = new Map(institutions.map(i => [i.id, i]));
   membershipsDb.forEach(m => {
@@ -708,6 +743,20 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     _dbId: pr.id,
   }));
 
+  const patientLocationCategoryRows = patientLocationCategoriesDb.map(cat => ({
+    id: cat.id,
+    _dbId: cat.id,
+    institution: mapInstitutionFromDb(cat.institution_id, institutionById),
+    institutionDbId: cat.institution_id,
+    kind: cat.kind,
+    name: cat.name,
+    color: cat.color || "slate",
+    description: cat.description || "",
+    is_active: cat.is_active !== false,
+    sort_order: cat.sort_order ?? 0,
+  }));
+  replaceCollection(PATIENT_LOCATION_CATEGORIES, patientLocationCategoryRows);
+
   const patientCodeByUuid = new Map();
   const patientByUuid = new Map();
   const patientRows = patientsDb.map(p => {
@@ -729,6 +778,10 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       adherence: p.adherence || "—",
       functional: p.functional_status || "—",
       support: p.support_network || "—",
+      sector_id: p.sector_id || "",
+      consultorio_id: p.consultorio_id || "",
+      sector: getPatientLocationLabel(p.sector_id),
+      consultorio: getPatientLocationLabel(p.consultorio_id),
       doctor: null,
       psychologist: null,
       ot: null,
@@ -1401,7 +1454,7 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v2.2.1</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.3</div>
     </div>
   </header>
 );
@@ -1724,6 +1777,8 @@ const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy 
     last_contact_date: emptyToNull(form.last_contact_date),
     next_control_date: emptyToNull(form.next_control_date),
     notes: emptyToNull(form.notes),
+    sector_id: emptyToNull(form.sector_id),
+    consultorio_id: emptyToNull(form.consultorio_id),
   };
   if (includeCreatedBy) payload.created_by = authSession?.user?.id || null;
   return payload;
@@ -1794,6 +1849,14 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
     if (error) throw error;
 
     if (!data) throw new Error("El paciente fue creado, pero Supabase no devolvió su identificador.");
+    const locationUpdate = {
+      sector_id: payload.sector_id || null,
+      consultorio_id: payload.consultorio_id || null,
+    };
+    if (locationUpdate.sector_id || locationUpdate.consultorio_id) {
+      const { error: locationError } = await supabase.from("patients").update(locationUpdate).eq("id", data);
+      if (locationError) throw locationError;
+    }
     return { id: data, clinical_code: payload.clinical_code };
   }
 
@@ -1877,6 +1940,8 @@ const defaultPatientForm = () => ({
   admission_date:new Date().toISOString().slice(0, 10),
   last_contact_date:new Date().toISOString().slice(0, 10),
   next_control_date:"",
+  sector_id:"",
+  consultorio_id:"",
   notes:"",
 });
 
@@ -1899,6 +1964,8 @@ const patientToForm = (patient) => ({
   admission_date: patient?.admission || "",
   last_contact_date: patient?.last_contact || "",
   next_control_date: patient?.next_control || "",
+  sector_id: patient?.sector_id || "",
+  consultorio_id: patient?.consultorio_id || "",
   notes: patient?.notes || "",
 });
 
@@ -2000,6 +2067,34 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
               <div><FieldLabel>Diagnóstico principal</FieldLabel><TextAreaInput rows={2} value={form.dx_main} onChange={v => updateForm("dx_main", v)} placeholder="Diagnóstico de trabajo" /></div>
               <div><FieldLabel>Diagnósticos secundarios</FieldLabel><TextAreaInput rows={2} value={form.dx_secondary} onChange={v => updateForm("dx_secondary", v)} placeholder="Separar con punto y coma" /></div>
             </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-black text-slate-100">Ubicación institucional</div>
+              <div className="text-[10px] text-slate-500">Administra estas categorías en Configuración → Sectores y consultorios</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <FieldLabel>Sector / unidad / letra</FieldLabel>
+                <SelectInput value={form.sector_id} onChange={v => updateForm("sector_id", v)}>
+                  <option value="">Sin sector</option>
+                  {getPatientLocationCategories(activeInstitution, "sector").map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                </SelectInput>
+              </div>
+              <div>
+                <FieldLabel>Consultorio / policlínico inscrito</FieldLabel>
+                <SelectInput value={form.consultorio_id} onChange={v => updateForm("consultorio_id", v)}>
+                  <option value="">Sin consultorio</option>
+                  {getPatientLocationCategories(activeInstitution, "consultorio").map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                </SelectInput>
+              </div>
+            </div>
+            {getPatientLocationCategories(activeInstitution).length === 0 && (
+              <div className="mt-3 rounded-xl border border-amber-800 bg-amber-950/20 p-3 text-xs text-amber-200">
+                Todavía no hay sectores ni consultorios configurados para esta institución. Puedes crear categorías propias desde Configuración.
+              </div>
+            )}
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
@@ -2505,7 +2600,7 @@ const patientSearchHaystack = (p) => {
   return normalizeText([
     p.id, p.initials, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
     p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
-    p.support, p.notes, noteText, p.next_control, teamNames, alerts, meds, cloz, lai,
+    p.support, p.notes, p.sector, p.consultorio, noteText, p.next_control, teamNames, alerts, meds, cloz, lai,
     ...getPatientDxTags(p).map(t => t.label),
   ].join(" "));
 };
@@ -2536,6 +2631,10 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
             <div className="text-sm font-black text-white">{patient.initials}</div>
           </div>
           <div className="min-w-0 flex-1">
+            <div className="mb-1 flex flex-wrap gap-1">
+              <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+              <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+            </div>
             <div className="truncate text-xs font-semibold text-slate-200">{patient.dx_main || "Sin diagnóstico principal"}</div>
             <div className="mt-1 flex flex-wrap gap-1">
               {dxTags.slice(0, 4).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-bold" style={{ borderColor:t.color, color:t.color }}>{t.label}</span>)}
@@ -2560,6 +2659,10 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
             <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
             <div className="text-white font-bold text-base leading-tight">{patient.initials}</div>
             <div className="text-slate-400 text-xs">{patient.age} años · {patient.gender === "F" ? "F" : patient.gender === "M" ? "M" : "NR"}</div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+              <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+            </div>
           </div>
           <div className="flex flex-col items-end gap-1">
             <RiskBadge risk={patient.risk} />
@@ -2955,7 +3058,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.2 · Gestión segura de pacientes</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.3 · Edición clínica y ubicación</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3048,7 +3151,11 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             <div>
               <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
               <div className="text-white text-xl font-bold">{patient.initials}</div>
-              <div className="text-slate-400 text-sm">{patient.age} años · {patient.gender === "F" ? "Femenino" : "Masculino"}</div>
+              <div className="text-slate-400 text-sm">{patient.age} años · {patient.gender === "F" ? "Femenino" : patient.gender === "M" ? "Masculino" : "No registrado"}</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+                <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="flex items-center gap-2">
@@ -3108,6 +3215,8 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                   ["Adherencia estimada", patient.adherence, "info"],
                   ["Estado funcional", patient.functional, "info"],
                   ["Red de apoyo", patient.support, "info"],
+                  ["Sector", patient.sector || "Sin sector", "info"],
+                  ["Consultorio", patient.consultorio || "Sin consultorio", "info"],
                   ["Ingreso al programa", patient.admission, "date"],
                 ].map(([label, value, type]) => (
                   <div key={label} className="bg-[#131920] rounded-lg p-3 border border-slate-800">
@@ -5053,6 +5162,124 @@ const ProfessionalsAdminPanel = ({ activeInstitution, onDataChanged }) => {
   );
 };
 
+
+const PatientLocationCategoriesPanel = ({ activeInstitution, onDataChanged }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [form, setForm] = useState({ id:"", kind:"sector", name:"", color:"sky", description:"", sortOrder:0, isActive:true });
+  const membership = getMembershipForWorkspace(activeInstitution);
+  const institutionId = membership?.institutionDbId;
+
+  const loadItems = async () => {
+    if (!isSupabaseConfigured || !institutionId) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { data, error } = await supabase
+        .from("patient_location_categories")
+        .select("id,institution_id,kind,name,color,description,is_active,sort_order")
+        .eq("institution_id", institutionId)
+        .order("kind")
+        .order("sort_order", { ascending:true })
+        .order("name", { ascending:true });
+      if (error) throw error;
+      setItems(data || []);
+    } catch (err) {
+      setMessage(err?.message || "No se pudieron cargar sectores/consultorios.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { loadItems(); }, [institutionId]);
+  const resetForm = () => setForm({ id:"", kind:"sector", name:"", color:"sky", description:"", sortOrder:0, isActive:true });
+  const editItem = (item) => setForm({
+    id:item.id,
+    kind:item.kind || "sector",
+    name:item.name || "",
+    color:item.color || "sky",
+    description:item.description || "",
+    sortOrder:item.sort_order ?? 0,
+    isActive:item.is_active !== false,
+  });
+  const saveItem = async (e) => {
+    e?.preventDefault?.();
+    if (!institutionId) return setMessage("No hay institución activa válida.");
+    setLoading(true);
+    setMessage("");
+    try {
+      const payload = {
+        institution_id: institutionId,
+        kind: form.kind,
+        name: form.name.trim(),
+        color: form.color,
+        description: form.description?.trim() || null,
+        sort_order: Number(form.sortOrder) || 0,
+        is_active: Boolean(form.isActive),
+      };
+      if (!payload.name) throw new Error("Escribe un nombre.");
+      const result = form.id
+        ? await supabase.from("patient_location_categories").update(payload).eq("id", form.id)
+        : await supabase.from("patient_location_categories").insert(payload);
+      if (result.error) throw result.error;
+      setMessage(form.id ? "Categoría actualizada." : "Categoría creada.");
+      resetForm();
+      await loadItems();
+      onDataChanged?.();
+    } catch (err) {
+      setMessage(err?.message || "No se pudo guardar la categoría.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Sectores y consultorios</div>
+          <div className="text-xs text-slate-500 mt-1">Crea categorías propias por institución: letras, colores, salas, unidades, policlínicos o consultorios inscritos.</div>
+        </div>
+        <button onClick={loadItems} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+      </div>
+      <form onSubmit={saveItem} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+          <div className="md:col-span-1"><FieldLabel>Tipo</FieldLabel><SelectInput value={form.kind} onChange={v => setForm({...form, kind:v})}><option value="sector">Sector</option><option value="consultorio">Consultorio</option></SelectInput></div>
+          <div className="md:col-span-2"><FieldLabel>Nombre</FieldLabel><TextInput value={form.name} onChange={v => setForm({...form, name:v})} placeholder="Ej: Sector A / Policlínico Norte" /></div>
+          <div><FieldLabel>Color</FieldLabel><SelectInput value={form.color} onChange={v => setForm({...form, color:v})}>{LOCATION_COLOR_OPTIONS.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</SelectInput></div>
+          <div><FieldLabel>Orden</FieldLabel><TextInput type="number" value={form.sortOrder} onChange={v => setForm({...form, sortOrder:v})} /></div>
+          <div><FieldLabel>Estado</FieldLabel><SelectInput value={form.isActive ? "true" : "false"} onChange={v => setForm({...form, isActive:v === "true"})}><option value="true">Activo</option><option value="false">Inactivo</option></SelectInput></div>
+          <div className="md:col-span-6"><FieldLabel>Descripción opcional</FieldLabel><TextInput value={form.description} onChange={v => setForm({...form, description:v})} placeholder="Ej: Pacientes del sector rojo / inscritos en CESFAM X" /></div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear categoría"}</button>
+        </div>
+      </form>
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        {["sector", "consultorio"].map(kind => (
+          <div key={kind} className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
+            <div className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">{LOCATION_KIND_LABELS[kind]}</div>
+            <div className="space-y-2">
+              {items.filter(item => item.kind === kind).map(item => (
+                <div key={item.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${LOCATION_COLOR_STYLES[item.color] || LOCATION_COLOR_STYLES.slate}`}>{item.name}</span>{item.is_active === false && <span className="text-[10px] text-red-400">Inactivo</span>}</div>
+                    {item.description && <div className="mt-1 truncate text-[10px] text-slate-500">{item.description}</div>}
+                  </div>
+                  <button type="button" onClick={() => editItem(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button>
+                </div>
+              ))}
+              {!items.filter(item => item.kind === kind).length && <div className="rounded-xl border border-dashed border-slate-800 p-3 text-xs text-slate-500">Sin categorías.</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, activeUser, setActiveUser, authSession, onDataChanged }) => (
   <div className="space-y-5 max-w-5xl">
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
@@ -5064,6 +5291,7 @@ const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode,
     </div>
     <InstitutionsAdminPanel onDataChanged={onDataChanged} />
     <ProfessionalsAdminPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
+    <PatientLocationCategoriesPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <UserAccessAdminPanel authSession={authSession} activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -5453,7 +5681,6 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         }
       `}</style>
 
-      <ThemeToggle themeMode={themeMode} setThemeMode={setThemeMode} />
       <ViewModeToggle mode={viewMode} setMode={setViewMode} autoIsMobile={autoIsMobile} />
 
       {isMobileView ? (
