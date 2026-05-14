@@ -1828,6 +1828,15 @@ const getInstitutionIdForWorkspace = async (workspaceId) => {
   return data.id;
 };
 
+// v2.7.1: función sincrónica para operaciones ya cargadas desde Supabase.
+// Evita el error "getInstitutionDbId is not defined" al guardar fármacos.
+const getInstitutionDbId = (workspaceId = ACTIVE_INSTITUTION_ID) => {
+  const membershipDbId = getMembershipForWorkspace(workspaceId)?.institutionDbId;
+  if (membershipDbId) return membershipDbId;
+  const inst = getAccessibleInstitutions().find(i => i.id === workspaceId);
+  return inst?._dbId || inst?.institutionDbId || null;
+};
+
 const getCurrentDbProfile = async (authSession, workspaceId = ACTIVE_INSTITUTION_ID) => {
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
 
