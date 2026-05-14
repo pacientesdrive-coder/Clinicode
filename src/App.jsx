@@ -1985,6 +1985,92 @@ const discontinueMedicationForPatient = async ({ patient, medication, authSessio
   });
 };
 
+
+const alertDefaultForm = () => ({
+  title: "",
+  type: "tarea",
+  priority: "medio",
+  due_date: todayIso(),
+  responsible_professional_id: getCurrentProfessionalId() || "",
+  comment: "",
+});
+
+const saveCustomAlertForPatient = async ({ patient, form, authSession }) => {
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)) throw new Error("Necesitas pertenecer a la institución para crear alertas.");
+  const title = String(form.title || "").trim();
+  if (!title) throw new Error("Escribe un título breve para la alerta.");
+  const payload = {
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    title,
+    type: form.type || "tarea",
+    priority: form.priority || "medio",
+    status: "pendiente",
+    due_date: emptyToNull(form.due_date) || todayIso(),
+    responsible_professional_id: emptyToNull(form.responsible_professional_id || getCurrentProfessionalId()),
+    comment: emptyToNull(form.comment),
+    created_by: authSession?.user?.id || null,
+  };
+  if (!isSupabaseConfigured) {
+    RAW_ALERTS.push({
+      id: `alert_${Date.now()}`,
+      institution: ACTIVE_INSTITUTION_ID,
+      patient: patient.id,
+      title: payload.title,
+      type: payload.type,
+      priority: payload.priority,
+      status: payload.status,
+      due: payload.due_date,
+      responsible: payload.responsible_professional_id,
+      comment: payload.comment || "",
+    });
+    return;
+  }
+  const { data, error } = await supabase.from("alerts").insert(payload).select("id").single();
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId,
+    patientId: patient._dbId,
+    authSession,
+    action: "Alerta personalizada creada",
+    field: "alerts.title",
+    previousValue: null,
+    nextValue: title,
+    eventType: "alerta",
+  });
+  return data?.id;
+};
+
+const resolvePatientAlert = async ({ patient, alert, authSession }) => {
+  if (!alert?.id) return;
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)) throw new Error("Necesitas pertenecer a la institución para resolver alertas.");
+  if (!isSupabaseConfigured) {
+    const idx = RAW_ALERTS.findIndex(a => a.id === alert.id);
+    if (idx >= 0) RAW_ALERTS[idx] = { ...RAW_ALERTS[idx], status: "resuelto" };
+    return;
+  }
+  const { error } = await supabase.from("alerts").update({
+    status: "resuelto",
+    resolved_at: new Date().toISOString(),
+  }).eq("id", alert.id);
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId,
+    patientId: patient?._dbId || null,
+    authSession,
+    action: "Alerta resuelta",
+    field: "alerts.status",
+    previousValue: alert.title,
+    nextValue: "resuelto",
+    eventType: "alerta",
+  });
+};
+
 const takePatientTreatmentInSupabase = async ({ patient, teamRole, isPrimary, authSession }) => {
   if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
@@ -2641,6 +2727,72 @@ const MedicationFormModal = ({ patient, medication, authSession, onClose, onSave
             <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
             <button type="submit" disabled={saving || !form.drug.trim()} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Guardando…" : "Guardar fármaco"}</button>
           </div>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+const CustomAlertFormModal = ({ patient, authSession, onClose, onSaved }) => {
+  const [form, setForm] = useState(() => alertDefaultForm());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const responsibleOptions = getResponsibleOptions();
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await saveCustomAlertForPatient({ patient, form, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo crear la alerta.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="w-full max-w-3xl overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70">
+        <div className="border-b border-slate-800 bg-[#131920] p-4">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-400">v2.8 · Alerta personalizada</div>
+          <h3 className="mt-1 text-xl font-black text-white">Nueva alerta / pendiente</h3>
+          <p className="text-xs text-slate-500">Paciente: <span className="font-bold text-slate-300">{patient.full_name || patient.initials}</span>. Úsala para solicitudes, llamados, recetas, informes, gestiones familiares o tareas clínicas breves.</p>
+        </div>
+        <div className="space-y-4 p-4">
+          {error && <div className="rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+          <div><FieldLabel>Título breve</FieldLabel><TextInput required value={form.title} onChange={v => update("title", v)} placeholder="Ej: Madre llamó por receta / paciente pidió informe" /></div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div><FieldLabel>Tipo</FieldLabel><SelectInput value={form.type} onChange={v => update("type", v)}>
+              <option value="tarea">Tarea / gestión</option>
+              <option value="control">Control / seguimiento</option>
+              <option value="administrativo">Administrativo</option>
+              <option value="farmaco">Fármaco / receta</option>
+              <option value="riesgo">Riesgo / seguridad</option>
+              <option value="reunion">Reunión / coordinación</option>
+              <option value="otro">Otro</option>
+            </SelectInput></div>
+            <div><FieldLabel>Prioridad</FieldLabel><SelectInput value={form.priority} onChange={v => update("priority", v)}>
+              <option value="bajo">Baja</option>
+              <option value="medio">Media</option>
+              <option value="alto">Alta</option>
+              <option value="critico">Crítica</option>
+            </SelectInput></div>
+            <div><FieldLabel>Fecha límite</FieldLabel><TextInput type="date" value={form.due_date} onChange={v => update("due_date", v)} /></div>
+          </div>
+          <div><FieldLabel>Responsable</FieldLabel><SelectInput value={form.responsible_professional_id} onChange={v => update("responsible_professional_id", v)}>
+            <option value="">Sin responsable / equipo</option>
+            {responsibleOptions.map(p => <option key={p.id} value={p.id}>{p.name} · {ROLE_LABELS[p.role] || p.role}</option>)}
+          </SelectInput></div>
+          <div><FieldLabel>Detalle / comentario</FieldLabel><TextAreaInput rows={5} value={form.comment} onChange={v => update("comment", v)} placeholder="Ej: Hija vino a pedir certificado. Revisar antecedentes y dejar listo antes del viernes." /></div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-800 bg-[#0d1117]/95 p-4">
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+          <button type="submit" disabled={saving || !form.title.trim()} className="rounded-2xl bg-fuchsia-600 px-5 py-2 text-sm font-black text-white hover:bg-fuchsia-500 disabled:opacity-50">{saving ? "Guardando…" : "Crear alerta"}</button>
         </div>
       </form>
     </div>
@@ -3825,8 +3977,10 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
 const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
   const [medModal, setMedModal] = useState(null);
+  const [alertModal, setAlertModal] = useState(false);
+  const [resolvingAlertId, setResolvingAlertId] = useState(null);
   const rc = getRiskCfg(patient.risk);
-  const patAlerts = ALERTS.filter(a => a.patient === patient.id);
+  const patAlerts = ALERTS.filter(a => a.patient === patient.id && a.status !== "resuelto" && a.status !== "cancelado");
   const patMeds   = patient.meds.map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean);
   const patTrace  = TRACE_EVENTS.filter(t => t.patient === patient.id);
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
@@ -3852,6 +4006,24 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
       setQuickTreatError(err?.message || "No se pudo tomar tratancia del paciente.");
     } finally {
       setQuickTreating(false);
+    }
+  };
+
+  const refreshInsideFicha = async (nextTab = tab) => {
+    await onDataChanged?.();
+    if (nextTab) setTab(nextTab);
+  };
+  const handleResolveAlert = async (alert) => {
+    if (!confirm(`¿Marcar como resuelta la alerta "${alert.title}"? Desaparecerá de las alertas activas.`)) return;
+    setResolvingAlertId(alert.id);
+    try {
+      await resolvePatientAlert({ patient, alert, authSession });
+      await refreshInsideFicha("alertas");
+    } catch (err) {
+      console.error(err);
+      window.alert(err?.message || "No se pudo resolver la alerta.");
+    } finally {
+      setResolvingAlertId(null);
     }
   };
 
@@ -4051,53 +4223,77 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
               </div>
               {patMeds.length === 0 && <div className="rounded-3xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin tratamientos registrados. {canEditPatient ? "Usa + Agregar fármaco para comenzar." : "Toma tratancia para poder editar tratamientos."}</div>}
               {patMeds.map(med => (
-                <div key={med.id} className={`rounded-3xl border p-4 space-y-3 ${med.isActive === false ? "border-slate-800 bg-slate-950/40 opacity-75" : "border-slate-700 bg-[#131920]"}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
+                <div key={med.id} className={`rounded-2xl border px-3 py-2 ${med.isActive === false ? "border-slate-800 bg-slate-950/35 opacity-75" : "border-slate-700 bg-[#111821]"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-base font-black text-white">{med.drug} <span className="text-sky-400">{med.dose}</span></div>
-                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${med.isActive === false ? "border-slate-600 text-slate-400" : "border-emerald-700 bg-emerald-950/20 text-emerald-300"}`}>{med.isActive === false ? "Suspendido" : "Activo"}</span>
-                        {med.program !== "general" && <span className="rounded-full border border-violet-700 bg-violet-950/20 px-2 py-0.5 text-[10px] font-black text-violet-300">{med.program === "clozapine" ? "Clozapina" : "LAI/depot"}</span>}
+                        <div className="truncate text-sm font-black text-white">{med.drug} <span className="text-fuchsia-400">{med.dose}</span></div>
+                        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-black ${med.isActive === false ? "border-slate-600 text-slate-400" : "border-emerald-700 bg-emerald-950/20 text-emerald-300"}`}>{med.isActive === false ? "Suspendido" : "Activo"}</span>
+                        {med.program !== "general" && <span className="rounded-full border border-violet-700 bg-violet-950/20 px-1.5 py-0.5 text-[9px] font-black text-violet-300">{med.program === "clozapine" ? "Clozapina" : "LAI/depot"}</span>}
                       </div>
-                      <div className="mt-1 font-mono text-xs text-slate-400">{med.scheme || "Sin esquema"} · {med.freq || "Sin frecuencia"}</div>
+                      <div className="mt-1 font-mono text-[11px] text-slate-400">{med.scheme || "Sin esquema"} · {med.freq || "Sin frecuencia"}</div>
                     </div>
                     {canEditPatient && (
-                      <button onClick={() => setMedModal({ mode:"edit", medication:med })} className="rounded-full border border-sky-700 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-900/30">
+                      <button onClick={() => setMedModal({ mode:"edit", medication:med })} className="rounded-full border border-sky-700 px-2.5 py-1 text-[11px] font-black text-sky-300 hover:bg-sky-900/30">
                         Editar
                       </button>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-400 md:grid-cols-4">
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Inicio</span><span className="text-slate-200">{med.startDate || "—"}</span></div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Último ajuste</span><span className="text-slate-200">{med.lastAdj || "—"}</span></div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Próx. control</span><span className="text-yellow-400">{med.nextControl || "—"}</span></div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Responsable</span><span className="inline-flex items-center gap-2 text-slate-200"><ProfAvatar id={med.prescriber} size="sm" /> {getProf(med.prescriber)?.initials || "—"}</span></div>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-slate-400 md:grid-cols-4">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Inicio</span><span className="text-slate-200">{med.startDate || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Ajuste</span><span className="text-slate-200">{med.lastAdj || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Control</span><span className="text-yellow-400">{med.nextControl || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Resp.</span><span className="inline-flex items-center gap-1 text-slate-200"><ProfAvatar id={med.prescriber} size="sm" /> {getProf(med.prescriber)?.initials || "—"}</span></div>
                   </div>
-                  {med.followup && <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-3 text-xs italic leading-relaxed text-slate-400">{med.followup}</div>}
+                  {med.followup && <div className="mt-2 whitespace-pre-wrap rounded-xl border border-sky-900/60 bg-sky-950/15 px-3 py-2 text-xs leading-relaxed text-slate-200">{med.followup}</div>}
                 </div>
               ))}
             </div>
           )}
+
           {tab === "alertas" && (
-            <div className="space-y-2">
-              {patAlerts.length === 0 && <div className="text-slate-500 text-sm">Sin alertas activas.</div>}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-400">v2.8 · Pendientes personalizados</div>
+                  <h3 className="text-base font-black text-white">Alertas, solicitudes y gestiones del caso</h3>
+                  <p className="text-xs text-slate-500">Registra pedidos de informe, recetas, llamados familiares, trámites o tareas que necesitan resolución oportuna.</p>
+                </div>
+                {getMembershipForWorkspace(ACTIVE_INSTITUTION_ID) && (
+                  <button onClick={() => setAlertModal(true)} className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-xs font-black text-white hover:bg-fuchsia-500">
+                    + Nueva alerta
+                  </button>
+                )}
+              </div>
+              {patAlerts.length === 0 && <div className="rounded-3xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin alertas activas. Puedes crear una alerta personalizada si hay una gestión pendiente.</div>}
               {patAlerts.map(a => {
                 const rc2 = getRiskCfg(a.priority);
                 return (
-                  <div key={a.id} className={`bg-[#131920] rounded-lg p-3 border ${rc2.border} border-opacity-60 flex gap-3`}>
+                  <div key={a.id} className={`bg-[#131920] rounded-2xl p-3 border ${rc2.border} border-opacity-60 flex gap-3`}>
                     <div className={`w-1 rounded-full flex-shrink-0 ${rc2.dot}`}></div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-slate-100">{a.title}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                          a.status==="pendiente" ? "border-red-700 text-red-400" :
-                          a.status==="en_curso" ? "border-yellow-700 text-yellow-400" :
-                          "border-emerald-700 text-emerald-400"}`}>{a.status}</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-black text-slate-100">{a.title}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            a.status==="pendiente" ? "border-red-700 text-red-400" :
+                            a.status==="en_curso" ? "border-yellow-700 text-yellow-400" :
+                            "border-emerald-700 text-emerald-400"}`}>{a.status}</span>
+                          <button
+                            type="button"
+                            disabled={resolvingAlertId === a.id}
+                            onClick={() => handleResolveAlert(a)}
+                            className="rounded-full border border-emerald-700 bg-emerald-950/20 px-2.5 py-1 text-[10px] font-black text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-50"
+                          >
+                            {resolvingAlertId === a.id ? "Resolviendo…" : "Resolver"}
+                          </button>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5">{a.comment}</div>
-                      <div className="flex items-center gap-3 mt-1.5">
-                        <span className="text-[10px] text-slate-500">⏱ {a.due}</span>
-                        <ProfAvatar id={a.responsible} size="sm" />
+                      {a.comment && <div className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-300">{a.comment}</div>}
+                      <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
+                        <span>⏱ {a.due || "Sin fecha"}</span>
+                        <span>Tipo: {a.type}</span>
+                        <span className="inline-flex items-center gap-1"><ProfAvatar id={a.responsible} size="sm" /> {getProf(a.responsible)?.initials || "sin resp."}</span>
                       </div>
                     </div>
                   </div>
@@ -4105,6 +4301,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
               })}
             </div>
           )}
+
           {tab === "equipo" && (
             <AdvancedTeamPanel
               patient={patient}
@@ -4182,7 +4379,15 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             medication={medModal.medication}
             authSession={authSession}
             onClose={() => setMedModal(null)}
-            onSaved={onDataChanged}
+            onSaved={() => refreshInsideFicha("farmacos")}
+          />
+        )}
+        {alertModal && (
+          <CustomAlertFormModal
+            patient={patient}
+            authSession={authSession}
+            onClose={() => setAlertModal(false)}
+            onSaved={() => refreshInsideFicha("alertas")}
           />
         )}
       </div>
@@ -4315,6 +4520,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const [safetyAction, setSafetyAction] = useState(null);
   const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
+  const selectedLive = selected ? (PATIENTS.find(p => p.id === selected.id) || selected) : null;
   const openCreate = () => { setEditingPatient(null); setFormMode("create"); };
   const openEdit = (patient) => { setSelected(null); setEditingPatient(patient); setFormMode("edit"); };
   const closeForm = () => { setFormMode(null); setEditingPatient(null); };
@@ -4340,7 +4546,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
 
   return (
     <div>
-      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} onSafetyAction={openSafetyAction} authSession={authSession} onDataChanged={onDataChanged} />}
+      {selectedLive && <PatientDetail patient={selectedLive} onClose={() => setSelected(null)} onEdit={openEdit} onSafetyAction={openSafetyAction} authSession={authSession} onDataChanged={onDataChanged} />}
       {formMode && (
         <PatientFormModal
           mode={formMode}
@@ -6288,7 +6494,8 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       setDbState({ loading: false, error: "", source: "demo" });
       return;
     }
-    setDbState({ loading: true, error: "", source: "supabase" });
+    // v2.8: refrescos después de guardar no deben desmontar la ficha del paciente ni devolver al dashboard.
+    setDbState(prev => ({ loading: prev.source !== "supabase", error: "", source: "supabase" }));
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
