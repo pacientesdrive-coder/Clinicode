@@ -57,6 +57,15 @@ const CLINICAL_NOTE_TYPES = [
 ];
 const getClinicalNoteType = (type) => CLINICAL_NOTE_TYPES.find(t => t.id === type) || CLINICAL_NOTE_TYPES[0];
 
+const ATTENDANCE_EVENT_TYPES = [
+  { id:"inasistencia", label:"Inasistencia", icon:"🚫", tone:"text-red-300 border-red-800 bg-red-950/25", description:"No se presenta a control/citación." },
+  { id:"postergacion", label:"Postergación / cambio de hora", icon:"↪️", tone:"text-amber-300 border-amber-800 bg-amber-950/25", description:"Cambia o posterga la hora antes de la atención." },
+  { id:"asistencia", label:"Asistencia registrada", icon:"✅", tone:"text-emerald-300 border-emerald-800 bg-emerald-950/25", description:"Asiste al control o contacto programado." },
+  { id:"cancelacion", label:"Cancelación justificada", icon:"🟦", tone:"text-sky-300 border-sky-800 bg-sky-950/25", description:"Cancela con aviso o justificación." },
+  { id:"contacto", label:"Contacto / gestión", icon:"☎️", tone:"text-violet-300 border-violet-800 bg-violet-950/25", description:"Contacto telefónico, coordinación o gestión administrativa." },
+];
+const getAttendanceEventType = (type) => ATTENDANCE_EVENT_TYPES.find(t => t.id === type) || ATTENDANCE_EVENT_TYPES[0];
+
 const getFileCategoryLabel = (category) => CLINICAL_FILE_CATEGORIES.find(c => c.id === category)?.label || "Archivo";
 const formatBytes = (bytes) => {
   const n = Number(bytes || 0);
@@ -417,6 +426,10 @@ const RAW_PATIENT_NOTES = [
   { id:"pn1", patient:"PAC-001", author:"p1", authorName:"Dra. Valentina Rojas", type:"gestion", body:"Nota demo: revisar adherencia, red de apoyo y coordinación de control próximo.", createdAt:"2024-10-01 10:30", pinned:false },
 ];
 
+const RAW_PATIENT_ATTENDANCE_EVENTS = [
+  { id:"att_demo_1", patient:"PAC-004", author:"p8", authorName:"T.S. Patricia Vergara", type:"inasistencia", eventDate:"2024-09-12", previousDate:"2024-09-12", newDate:"", reason:"No se presenta a control", notes:"Registro demo de inasistencia. Diferenciar de postergación o cambio de hora.", createdAt:"2024-09-12 12:30" },
+];
+
 
 // ─── ASIGNACIÓN MOCK POR INSTITUCIÓN ──────────────────────────────────────
 // En una versión con backend, este campo debería venir de la tabla institution_id
@@ -503,6 +516,11 @@ RAW_MESSAGES.forEach(message => {
 RAW_FILES.forEach(file => {
   file.institution = getRawPatientInstitution(file.patient);
   file.author = mapHospitalProf(file.author, file.institution);
+});
+
+RAW_PATIENT_ATTENDANCE_EVENTS.forEach(event => {
+  event.institution = getRawPatientInstitution(event.patient);
+  event.author = mapHospitalProf(event.author, event.institution);
 });
 
 const createScopedCollection = (source, filterFn) => new Proxy(source, {
@@ -601,6 +619,8 @@ const TRACE_EVENTS = createScopedCollection(RAW_TRACE_EVENTS, canAccessPatientLi
 const MESSAGES = createScopedCollection(RAW_MESSAGES, canAccessPatientLinkedItem);
 const FILES = createScopedCollection(RAW_FILES, canAccessPatientLinkedItem);
 const PATIENT_NOTES = createScopedCollection(RAW_PATIENT_NOTES, canAccessPatientLinkedItem);
+
+const PATIENT_ATTENDANCE_EVENTS = createScopedCollection(RAW_PATIENT_ATTENDANCE_EVENTS, canAccessPatientLinkedItem);
 
 const DEMO_TODAY = new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, days) => {
@@ -712,6 +732,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     messagesRes,
     filesRes,
     patientNotesRes,
+    attendanceEventsRes,
     patientLocationCategoriesRes,
   ] = await Promise.all([
     supabase.from("institutions").select("*"),
@@ -726,10 +747,11 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     supabase.from("messages").select("*").order("created_at", { ascending: false }),
     supabase.from("files").select("*").order("created_at", { ascending: false }),
     supabase.from("patient_notes").select("*").order("created_at", { ascending: false }),
+    supabase.from("patient_attendance_events").select("*").order("event_date", { ascending: false }).order("created_at", { ascending: false }),
     supabase.from("patient_location_categories").select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
   ]);
 
-  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes, patientLocationCategoriesRes];
+  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes, attendanceEventsRes, patientLocationCategoriesRes];
   const firstError = responses.find(r => r.error)?.error;
   if (firstError) throw firstError;
 
@@ -745,6 +767,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const messagesDb = messagesRes.data || [];
   const filesDb = filesRes.data || [];
   const patientNotesDb = patientNotesRes.data || [];
+  const attendanceEventsDb = attendanceEventsRes.data || [];
   const patientLocationCategoriesDb = patientLocationCategoriesRes.data || [];
 
   const institutionById = new Map(institutions.map(i => [i.id, i]));
@@ -1054,6 +1077,25 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     updatedAt: note.updated_at,
   }));
 
+  const attendanceRows = attendanceEventsDb.map(event => ({
+    id: event.id,
+    _dbId: event.id,
+    institution: mapInstitutionFromDb(event.institution_id, institutionById),
+    institutionDbId: event.institution_id,
+    patient: patientCodeByUuid.get(event.patient_id) || null,
+    patientDbId: event.patient_id,
+    author: event.actor_professional_id || event.actor_profile_id,
+    authorName: professionalNameById.get(event.actor_professional_id) || profile.full_name || profile.email || "Usuario",
+    profileAuthor: event.actor_profile_id,
+    type: event.event_type || "inasistencia",
+    eventDate: event.event_date,
+    previousDate: event.previous_date || "",
+    newDate: event.new_date || "",
+    reason: event.reason || "",
+    notes: event.notes || "",
+    createdAt: (event.created_at || "").replace("T", " ").slice(0, 16),
+  }));
+
   replaceCollection(RAW_PROFESSIONALS, professionalRows);
   replaceCollection(RAW_PATIENTS, patientRows);
   replaceCollection(RAW_MEDICATIONS, medicationRows);
@@ -1062,6 +1104,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   replaceCollection(RAW_MESSAGES, messageRows);
   replaceCollection(RAW_FILES, fileRows);
   replaceCollection(RAW_PATIENT_NOTES, noteRows);
+  replaceCollection(RAW_PATIENT_ATTENDANCE_EVENTS, attendanceRows);
   USING_SUPABASE_DATA = true;
 
   const defaultMembership = membershipRows.find(m => m.isDefault) || membershipRows[0];
@@ -3212,6 +3255,64 @@ const savePatientNoteToSupabase = async ({ patient, body, noteType, authSession 
   if (error) throw error;
 };
 
+const getPatientAttendanceEvents = (patientCode) => PATIENT_ATTENDANCE_EVENTS
+  .filter(e => e.patient === patientCode)
+  .sort((a, b) => String(b.eventDate || b.createdAt || "").localeCompare(String(a.eventDate || a.createdAt || "")));
+
+const getPatientAttendanceStats = (patientCode) => {
+  const events = getPatientAttendanceEvents(patientCode);
+  return {
+    total: events.length,
+    inasistencias: events.filter(e => e.type === "inasistencia").length,
+    postergaciones: events.filter(e => e.type === "postergacion").length,
+    asistencias: events.filter(e => e.type === "asistencia").length,
+    ultima: events[0] || null,
+  };
+};
+
+const savePatientAttendanceEventToSupabase = async ({ patient, form, authSession }) => {
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId) {
+    throw new Error("El registro de asistencia requiere Supabase y un paciente guardado en la base de datos.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+  const eventType = form?.type || "inasistencia";
+  const eventDate = form?.eventDate || new Date().toISOString().slice(0, 10);
+  const reason = String(form?.reason || "").trim();
+  const notes = String(form?.notes || "").trim();
+
+  const { error } = await supabase.from("patient_attendance_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    event_type: eventType,
+    event_date: eventDate,
+    previous_date: form?.previousDate || null,
+    new_date: form?.newDate || null,
+    reason: reason || null,
+    notes: notes || null,
+  });
+  if (error) throw error;
+
+  if (eventType === "inasistencia") {
+    await supabase.from("patients").update({ status: "inasistente", last_contact_date: eventDate }).eq("id", patient._dbId);
+  }
+
+  await supabase.from("trace_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    action: eventType === "inasistencia" ? "Inasistencia registrada" : eventType === "postergacion" ? "Hora postergada/cambiada" : "Evento de asistencia registrado",
+    field: "patient_attendance_events.event_type",
+    previous_value: null,
+    next_value: `${getAttendanceEventType(eventType).label} · ${eventDate}`,
+    event_type: "edicion",
+  });
+};
+
 // ─── PATIENT CARD ──────────────────────────────────────────────────────────
 const getPatientDxTags = (patient) => {
   const dxParts = [patient?.dx_main, ...(Array.isArray(patient?.dx_secondary) ? patient.dx_secondary : [])];
@@ -3239,12 +3340,13 @@ const patientSearchHaystack = (p) => {
   const alerts = ALERTS.filter(a => a.patient === p.id).map(a => `${a.title} ${a.comment} ${a.priority} ${a.status}`).join(" ");
   const meds = (p.meds || []).map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean).map(m => `${m.drug} ${m.dose} ${m.scheme} ${m.followup}`).join(" ");
   const noteText = getPatientNotes(p.id).map(n => `${n.body} ${getClinicalNoteType(n.type).label} ${n.authorName}`).join(" ");
+  const attendanceText = getPatientAttendanceEvents(p.id).map(e => `${getAttendanceEventType(e.type).label} ${e.reason || ""} ${e.notes || ""} ${e.eventDate || ""}`).join(" ");
   const cloz = CLOZAPINE_TRACKING[p.id] ? "clozapina hemograma programa" : "";
   const lai = DEPOT_TRACKING[p.id] ? "inyectable deposito lai depot" : "";
   return normalizeText([
     p.id, p.rut, p.full_name, p.initials, p.birth_date, p.email, p.phone, p.address, p.comuna, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
     p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
-    p.support, p.notes, p.sector, p.consultorio, noteText, p.next_control, teamNames, alerts, meds, cloz, lai,
+    p.support, p.notes, p.sector, p.consultorio, noteText, attendanceText, p.next_control, teamNames, alerts, meds, cloz, lai,
     ...getPatientDxTags(p).map(t => t.label),
   ].join(" "));
 };
@@ -3256,7 +3358,8 @@ const QUICK_PATIENT_FILTERS = [
   { id:"clozapina", label:"Clozapina", fn: p => Boolean(CLOZAPINE_TRACKING[p.id]) || (p.meds || []).some(mid => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes("clozapina")) },
   { id:"lai", label:"LAI/depot", fn: p => Boolean(DEPOT_TRACKING[p.id]) || (p.meds || []).some(mid => ["lai","depot","paliperidona","risperidona"].some(k => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes(k))) },
   { id:"sin_control", label:"Sin control", fn: p => !p.next_control },
-  { id:"inasistentes", label:"Inasistentes", fn: p => p.status === "inasistente" },
+  { id:"inasistentes", label:"Inasistentes", fn: p => p.status === "inasistente" || getPatientAttendanceStats(p.id).inasistencias > 0 },
+  { id:"postergados", label:"Postergados", fn: p => getPatientAttendanceStats(p.id).postergaciones > 0 },
   { id:"alertas", label:"Con alertas", fn: p => (p.alerts || 0) > 0 || ALERTS.some(a => a.patient === p.id && a.status !== "resuelto") },
 ];
 
@@ -3339,6 +3442,16 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
           {patient.tasks > 0 && (
             <span className="flex items-center gap-1 text-yellow-400 text-[10px] font-semibold bg-yellow-900/20 px-1.5 py-0.5 rounded border border-yellow-800">
               ✓ {patient.tasks} tarea{patient.tasks>1?"s":""}
+            </span>
+          )}
+          {getPatientAttendanceStats(patient.id).inasistencias > 0 && (
+            <span className="flex items-center gap-1 text-red-300 text-[10px] font-semibold bg-red-900/20 px-1.5 py-0.5 rounded border border-red-800">
+              🚫 {getPatientAttendanceStats(patient.id).inasistencias} inasist.
+            </span>
+          )}
+          {getPatientAttendanceStats(patient.id).postergaciones > 0 && (
+            <span className="flex items-center gap-1 text-amber-300 text-[10px] font-semibold bg-amber-900/20 px-1.5 py-0.5 rounded border border-amber-800">
+              ↪️ {getPatientAttendanceStats(patient.id).postergaciones} post.
             </span>
           )}
         </div>
@@ -3681,6 +3794,99 @@ const ClinicalNotesPanel = ({ patient, notes = [], authSession, onDataChanged })
   );
 };
 
+const PatientAttendancePanel = ({ patient, events = [], authSession, onDataChanged }) => {
+  const [form, setForm] = useState({
+    type: "inasistencia",
+    eventDate: new Date().toISOString().slice(0, 10),
+    previousDate: patient?.next_control || "",
+    newDate: "",
+    reason: "",
+    notes: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const stats = getPatientAttendanceStats(patient.id);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    try {
+      await savePatientAttendanceEventToSupabase({ patient, form, authSession });
+      setForm(prev => ({ ...prev, reason:"", notes:"", previousDate: prev.newDate || patient?.next_control || "", newDate:"" }));
+      setMessage("Registro guardado. Si fue inasistencia, el estado del paciente queda marcado como inasistente.");
+      await onDataChanged?.();
+    } catch (error) {
+      console.error(error);
+      setMessage(error?.message || "No se pudo guardar el registro.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-400">v2.9 · Asistencia y cambios de hora</div>
+            <h3 className="text-base font-black text-white">Inasistencias y postergaciones</h3>
+            <p className="text-xs text-slate-500">Registra inasistencias separadas de postergaciones/cambios de hora. Útil para continuidad, rescate y decisiones según protocolo local.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-2xl border border-red-900/60 bg-red-950/20 px-3 py-2"><div className="text-[10px] text-red-300">Inasist.</div><div className="text-lg font-black text-red-200">{stats.inasistencias}</div></div>
+            <div className="rounded-2xl border border-amber-900/60 bg-amber-950/20 px-3 py-2"><div className="text-[10px] text-amber-300">Posterg.</div><div className="text-lg font-black text-amber-200">{stats.postergaciones}</div></div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/40 px-3 py-2"><div className="text-[10px] text-slate-400">Total</div><div className="text-lg font-black text-slate-100">{stats.total}</div></div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            <div>
+              <FieldLabel>Tipo</FieldLabel>
+              <SelectInput value={form.type} onChange={v => update("type", v)}>
+                {ATTENDANCE_EVENT_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+              </SelectInput>
+            </div>
+            <div><FieldLabel>Fecha del evento</FieldLabel><TextInput type="date" value={form.eventDate} onChange={v => update("eventDate", v)} /></div>
+            <div><FieldLabel>Hora/fecha original</FieldLabel><TextInput type="date" value={form.previousDate} onChange={v => update("previousDate", v)} /></div>
+            <div><FieldLabel>Nueva fecha</FieldLabel><TextInput type="date" value={form.newDate} onChange={v => update("newDate", v)} /></div>
+            <div><FieldLabel>Motivo breve</FieldLabel><TextInput value={form.reason} onChange={v => update("reason", v)} placeholder="Ej: no asiste / pidió cambio" /></div>
+          </div>
+          <div className="mt-3"><FieldLabel>Detalle / gestión realizada</FieldLabel><TextAreaInput rows={3} value={form.notes} onChange={v => update("notes", v)} placeholder="Ej.: Se llama a paciente; no contesta. Madre avisa que no podrá asistir. Se reagenda para..." /></div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className={`text-xs ${message.includes("guardado") ? "text-emerald-400" : "text-amber-400"}`}>{message}</div>
+            <button disabled={saving} className="rounded-2xl bg-amber-600 px-4 py-2 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">{saving ? "Guardando…" : "Guardar registro"}</button>
+          </div>
+        </form>
+      </div>
+
+      <div className="space-y-2">
+        {events.length === 0 && <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin registros de asistencia, inasistencia o postergación.</div>}
+        {events.map(ev => {
+          const type = getAttendanceEventType(ev.type);
+          return (
+            <div key={ev.id} className={`rounded-2xl border p-3 ${type.tone}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-black text-sm">{type.icon} {type.label}</div>
+                <div className="font-mono text-[11px] text-slate-400">{ev.eventDate || ev.createdAt}</div>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                {ev.previousDate && <span>Original: <b className="text-slate-200">{ev.previousDate}</b></span>}
+                {ev.newDate && <span>Nueva: <b className="text-slate-200">{ev.newDate}</b></span>}
+                {ev.reason && <span>Motivo: <b className="text-slate-200">{ev.reason}</b></span>}
+                <span>Autor: <b className="text-slate-200">{ev.authorName || getProf(ev.author)?.name || "Usuario"}</b></span>
+              </div>
+              {ev.notes && <div className="mt-2 whitespace-pre-wrap rounded-xl border border-slate-800/80 bg-slate-950/25 p-2 text-xs leading-relaxed text-slate-200">{ev.notes}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSaved }) => {
   const isDelete = action === "delete";
   const [reason, setReason] = useState("");
@@ -3986,6 +4192,8 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
   const patFiles  = FILES.filter(f => f.patient === patient.id);
   const patNotes  = getPatientNotes(patient.id);
+  const patAttendance = getPatientAttendanceEvents(patient.id);
+  const attendanceStats = getPatientAttendanceStats(patient.id);
   const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
   const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
   const currentProfessionalId = membership?.professionalId || null;
@@ -4032,6 +4240,7 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
     { id:"dx",          label:"Diagnósticos" },
     { id:"farmacos",    label:"Fármacos" },
     { id:"alertas",     label:"Alertas" },
+    { id:"asistencia",  label:"Asistencia" },
     { id:"equipo",      label:"Equipo" },
     { id:"archivos",    label:"Archivos" },
     { id:"notas",       label:"Notas" },
@@ -4151,6 +4360,14 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                   <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
                     <div className="text-slate-500 text-[10px] mb-1">Alertas activas</div>
                     <div className={`text-xs font-bold ${patient.alerts > 0 ? "text-red-400" : "text-emerald-400"}`}>{patient.alerts}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Inasistencias</div>
+                    <div className={`text-xs font-bold ${attendanceStats.inasistencias > 0 ? "text-red-400" : "text-slate-300"}`}>{attendanceStats.inasistencias}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Postergaciones</div>
+                    <div className={`text-xs font-bold ${attendanceStats.postergaciones > 0 ? "text-amber-400" : "text-slate-300"}`}>{attendanceStats.postergaciones}</div>
                   </div>
                 </div>
               </div>
@@ -4302,6 +4519,14 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             </div>
           )}
 
+          {tab === "asistencia" && (
+            <PatientAttendancePanel
+              patient={patient}
+              events={patAttendance}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
+          )}
           {tab === "equipo" && (
             <AdvancedTeamPanel
               patient={patient}
