@@ -549,7 +549,7 @@ const getPatientTeamIds = (patient) => {
   return Array.from(new Set([...compact, ...expanded]));
 };
 
-// v2.6.3: las tarjetas leen el paciente "vivo" desde RAW_PATIENTS y no solo
+// v2.7: las tarjetas leen el paciente "vivo" desde RAW_PATIENTS y no solo
 // el objeto stale que quedó al abrir el modal. Así, si alguien toma tratancia,
 // las tarjetas muestran inmediatamente PD + SA u otros tratantes reales.
 const getPatientTeamDisplayIds = (patient, limit = 8) => {
@@ -902,6 +902,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       nextControl: m.next_control_date,
       followup: m.followup || "",
       program: m.program || "general",
+      isActive: m.is_active !== false,
     });
     if (!patient.meds.includes(m.id)) patient.meds.push(m.id);
   });
@@ -1877,6 +1878,104 @@ const insertTraceEvent = async ({ institutionId, patientId, authSession, action,
 };
 
 
+
+const buildMedicationPayload = (form, patient, authSession) => {
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  return {
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    drug: String(form.drug || "").trim(),
+    dose: emptyToNull(form.dose),
+    scheme: emptyToNull(form.scheme),
+    frequency: emptyToNull(form.frequency),
+    start_date: emptyToNull(form.start_date),
+    last_adjustment_date: emptyToNull(form.last_adjustment_date),
+    next_control_date: emptyToNull(form.next_control_date),
+    prescriber_professional_id: emptyToNull(form.prescriber_professional_id || getCurrentProfessionalId()),
+    followup: emptyToNull(form.followup),
+    program: form.program || "general",
+    is_active: form.is_active !== false,
+  };
+};
+
+const saveMedicationForPatient = async ({ patient, medication, form, authSession }) => {
+  if (!isSupabaseConfigured) {
+    const newId = medication?.id || `med_${Date.now()}`;
+    const row = {
+      id: newId,
+      _dbId: null,
+      institution: ACTIVE_INSTITUTION_ID,
+      drug: form.drug,
+      dose: form.dose,
+      scheme: form.scheme,
+      freq: form.frequency,
+      startDate: form.start_date,
+      lastAdj: form.last_adjustment_date,
+      prescriber: form.prescriber_professional_id || getCurrentProfessionalId(),
+      nextControl: form.next_control_date,
+      followup: form.followup,
+      program: form.program || "general",
+      isActive: form.is_active !== false,
+    };
+    const idx = RAW_MEDICATIONS.findIndex(m => m.id === newId);
+    if (idx >= 0) RAW_MEDICATIONS[idx] = { ...RAW_MEDICATIONS[idx], ...row };
+    else RAW_MEDICATIONS.push(row);
+    const rawPatient = getLivePatient(patient) || patient;
+    if (rawPatient && !rawPatient.meds.includes(newId)) rawPatient.meds.push(newId);
+    return newId;
+  }
+  if (!canEditPatientInCurrentWorkspace(patient)) throw new Error("Necesitas ser tratante activo o administrador para modificar fármacos.");
+  const payload = buildMedicationPayload(form, patient, authSession);
+  if (!payload.drug) throw new Error("Debes escribir el nombre del fármaco.");
+  let result;
+  if (medication?._dbId) {
+    result = await supabase.from("medications").update(payload).eq("id", medication._dbId).select("id").single();
+  } else {
+    result = await supabase.from("medications").insert(payload).select("id").single();
+  }
+  if (result.error) throw result.error;
+  await insertTraceEvent({
+    institutionId: payload.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: medication?._dbId ? "Fármaco actualizado" : "Fármaco agregado",
+    field: "medications.drug",
+    previousValue: medication?.drug || null,
+    nextValue: `${payload.drug}${payload.dose ? ` ${payload.dose}` : ""}`,
+    eventType: "edicion",
+  });
+  return result.data?.id;
+};
+
+const discontinueMedicationForPatient = async ({ patient, medication, authSession }) => {
+  if (!medication) return;
+  if (!isSupabaseConfigured) {
+    const idx = RAW_MEDICATIONS.findIndex(m => m.id === medication.id);
+    if (idx >= 0) RAW_MEDICATIONS[idx] = { ...RAW_MEDICATIONS[idx], isActive: false, followup: `SUSPENDIDO. ${RAW_MEDICATIONS[idx].followup || ""}`.trim() };
+    return;
+  }
+  if (!canEditPatientInCurrentWorkspace(patient)) throw new Error("Necesitas ser tratante activo o administrador para suspender fármacos.");
+  if (!medication?._dbId) throw new Error("Este fármaco no tiene identificador de base de datos.");
+  const { error } = await supabase.from("medications").update({
+    is_active: false,
+    followup: `SUSPENDIDO. ${medication.followup || ""}`.trim(),
+    last_adjustment_date: new Date().toISOString().slice(0, 10),
+  }).eq("id", medication._dbId);
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId: getInstitutionDbId(ACTIVE_INSTITUTION_ID),
+    patientId: patient._dbId,
+    authSession,
+    action: "Fármaco suspendido",
+    field: "medications.is_active",
+    previousValue: medication.drug,
+    nextValue: "suspendido",
+    eventType: "edicion",
+  });
+};
+
 const takePatientTreatmentInSupabase = async ({ patient, teamRole, isPrimary, authSession }) => {
   if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
@@ -2435,6 +2534,104 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           <button type="submit" disabled={saving || !canCreate} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
             {saving ? "Guardando…" : mode === "create" ? "Crear paciente" : "Guardar cambios"}
           </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+const medicationDefaultForm = (medication = null) => ({
+  drug: medication?.drug || "",
+  dose: medication?.dose || "",
+  scheme: medication?.scheme || "",
+  frequency: medication?.freq || "",
+  start_date: medication?.startDate || new Date().toISOString().slice(0, 10),
+  last_adjustment_date: medication?.lastAdj || "",
+  next_control_date: medication?.nextControl || "",
+  prescriber_professional_id: medication?.prescriber || getCurrentProfessionalId() || "",
+  followup: medication?.followup || "",
+  program: medication?.program || "general",
+  is_active: medication?.isActive !== false,
+});
+
+const MedicationFormModal = ({ patient, medication, authSession, onClose, onSaved }) => {
+  const [form, setForm] = useState(() => medicationDefaultForm(medication));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const prescriberOptions = getResponsibleOptions();
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await saveMedicationForPatient({ patient, medication, form, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo guardar el fármaco.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const suspend = async () => {
+    if (!medication) return;
+    if (!confirm(`¿Suspender ${medication.drug}? Quedará en la ficha como inactivo.`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await discontinueMedicationForPatient({ patient, medication, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo suspender el fármaco.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70">
+        <div className="border-b border-slate-800 bg-[#131920] p-4">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-400">v2.7 · Farmacoterapia editable</div>
+          <h3 className="mt-1 text-xl font-black text-white">{medication ? "Editar fármaco" : "Agregar fármaco"}</h3>
+          <p className="text-xs text-slate-500">Paciente: <span className="font-bold text-slate-300">{patient.full_name || patient.initials}</span>. Solo tratantes activos o administradores pueden modificar tratamientos.</p>
+        </div>
+        <div className="max-h-[calc(92vh-150px)] space-y-4 overflow-y-auto p-4">
+          {error && <div className="rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div><FieldLabel>Fármaco</FieldLabel><TextInput required value={form.drug} onChange={v => update("drug", v)} placeholder="Ej: Escitalopram" /></div>
+            <div><FieldLabel>Dosis</FieldLabel><TextInput value={form.dose} onChange={v => update("dose", v)} placeholder="Ej: 10 mg" /></div>
+            <div><FieldLabel>Esquema</FieldLabel><TextInput value={form.scheme} onChange={v => update("scheme", v)} placeholder="Ej: 1-0-0 / 0-0-1 / SOS" /></div>
+            <div><FieldLabel>Frecuencia</FieldLabel><TextInput value={form.frequency} onChange={v => update("frequency", v)} placeholder="Ej: Matutino, cada 12 horas" /></div>
+            <div><FieldLabel>Fecha de inicio</FieldLabel><TextInput type="date" value={form.start_date} onChange={v => update("start_date", v)} /></div>
+            <div><FieldLabel>Último ajuste</FieldLabel><TextInput type="date" value={form.last_adjustment_date} onChange={v => update("last_adjustment_date", v)} /></div>
+            <div><FieldLabel>Próximo control farmacológico</FieldLabel><TextInput type="date" value={form.next_control_date} onChange={v => update("next_control_date", v)} /></div>
+            <div><FieldLabel>Programa</FieldLabel><SelectInput value={form.program} onChange={v => update("program", v)}>
+              <option value="general">General</option>
+              <option value="clozapine">Clozapina</option>
+              <option value="lai">Inyectable depósito / LAI</option>
+            </SelectInput></div>
+            <div><FieldLabel>Prescriptor/responsable</FieldLabel><SelectInput value={form.prescriber_professional_id} onChange={v => update("prescriber_professional_id", v)}>
+              <option value="">Sin responsable</option>
+              {prescriberOptions.map(p => <option key={p.id} value={p.id}>{p.name} · {ROLE_LABELS[p.role] || p.role}</option>)}
+            </SelectInput></div>
+            <label className="flex items-end gap-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-3 text-sm font-bold text-slate-300">
+              <input type="checkbox" checked={form.is_active} onChange={e => update("is_active", e.target.checked)} />
+              Tratamiento activo
+            </label>
+          </div>
+          <div><FieldLabel>Seguimiento / indicación / motivo</FieldLabel><TextAreaInput rows={4} value={form.followup} onChange={v => update("followup", v)} placeholder="Ej: evaluar respuesta, control metabólico, RAM, suspensión, indicaciones…" /></div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 bg-[#0d1117]/95 p-4">
+          <div>{medication && medication.isActive !== false && <button type="button" onClick={suspend} disabled={saving} className="rounded-2xl border border-red-800 px-4 py-2 text-sm font-black text-red-300 hover:bg-red-950/30 disabled:opacity-50">Suspender</button>}</div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+            <button type="submit" disabled={saving || !form.drug.trim()} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Guardando…" : "Guardar fármaco"}</button>
+          </div>
         </div>
       </form>
     </div>
@@ -3352,7 +3549,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.3 · Tratancia corregida</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.7 · Ficha clínica completa</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3511,7 +3708,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
       <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.3 · Tratancia corregida</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.7 · Ficha clínica completa</div>
             <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
             <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
           </div>
@@ -3618,6 +3815,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
 const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
+  const [medModal, setMedModal] = useState(null);
   const rc = getRiskCfg(patient.risk);
   const patAlerts = ALERTS.filter(a => a.patient === patient.id);
   const patMeds   = patient.meds.map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean);
@@ -3830,23 +4028,43 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
           )}
           {tab === "farmacos" && (
             <div className="space-y-3">
-              {patMeds.length === 0 && <div className="text-slate-500 text-sm">Sin tratamientos registrados.</div>}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-400">v2.7 · Tratamientos editables</div>
+                  <h3 className="text-base font-black text-white">Farmacoterapia del paciente</h3>
+                  <p className="text-xs text-slate-500">Registra fármaco, dosis, esquema, fechas de control, responsable y seguimiento.</p>
+                </div>
+                {canEditPatient && (
+                  <button onClick={() => setMedModal({ mode:"create", medication:null })} className="rounded-2xl bg-sky-600 px-4 py-2 text-xs font-black text-white hover:bg-sky-500">
+                    + Agregar fármaco
+                  </button>
+                )}
+              </div>
+              {patMeds.length === 0 && <div className="rounded-3xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin tratamientos registrados. {canEditPatient ? "Usa + Agregar fármaco para comenzar." : "Toma tratancia para poder editar tratamientos."}</div>}
               {patMeds.map(med => (
-                <div key={med.id} className="bg-[#131920] rounded-lg p-4 border border-slate-700 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-white font-semibold">{med.drug} <span className="text-sky-400">{med.dose}</span></div>
-                    <span className="text-xs font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">{med.scheme}</span>
+                <div key={med.id} className={`rounded-3xl border p-4 space-y-3 ${med.isActive === false ? "border-slate-800 bg-slate-950/40 opacity-75" : "border-slate-700 bg-[#131920]"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-base font-black text-white">{med.drug} <span className="text-sky-400">{med.dose}</span></div>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${med.isActive === false ? "border-slate-600 text-slate-400" : "border-emerald-700 bg-emerald-950/20 text-emerald-300"}`}>{med.isActive === false ? "Suspendido" : "Activo"}</span>
+                        {med.program !== "general" && <span className="rounded-full border border-violet-700 bg-violet-950/20 px-2 py-0.5 text-[10px] font-black text-violet-300">{med.program === "clozapine" ? "Clozapina" : "LAI/depot"}</span>}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-slate-400">{med.scheme || "Sin esquema"} · {med.freq || "Sin frecuencia"}</div>
+                    </div>
+                    {canEditPatient && (
+                      <button onClick={() => setMedModal({ mode:"edit", medication:med })} className="rounded-full border border-sky-700 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-900/30">
+                        Editar
+                      </button>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                    <span>Freq: <span className="text-slate-200">{med.freq}</span></span>
-                    <span>Inicio: <span className="text-slate-200">{med.startDate}</span></span>
-                    <span>Último ajuste: <span className="text-slate-200">{med.lastAdj}</span></span>
-                    <span>Prox. control: <span className="text-yellow-400">{med.nextControl}</span></span>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-400 md:grid-cols-4">
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Inicio</span><span className="text-slate-200">{med.startDate || "—"}</span></div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Último ajuste</span><span className="text-slate-200">{med.lastAdj || "—"}</span></div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Próx. control</span><span className="text-yellow-400">{med.nextControl || "—"}</span></div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-2"><span className="block text-[9px] uppercase text-slate-500">Responsable</span><span className="inline-flex items-center gap-2 text-slate-200"><ProfAvatar id={med.prescriber} size="sm" /> {getProf(med.prescriber)?.initials || "—"}</span></div>
                   </div>
-                  <div className="flex items-center justify-between border-t border-slate-700 pt-2">
-                    <div className="text-[10px] text-slate-400 italic">{med.followup}</div>
-                    <ProfAvatar id={med.prescriber} size="sm" />
-                  </div>
+                  {med.followup && <div className="rounded-2xl border border-slate-800 bg-slate-950/25 p-3 text-xs italic leading-relaxed text-slate-400">{med.followup}</div>}
                 </div>
               ))}
             </div>
@@ -3949,6 +4167,15 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             </div>
           )}
         </div>
+        {medModal && (
+          <MedicationFormModal
+            patient={patient}
+            medication={medModal.medication}
+            authSession={authSession}
+            onClose={() => setMedModal(null)}
+            onSaved={onDataChanged}
+          />
+        )}
       </div>
     </div>
   );
