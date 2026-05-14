@@ -20,6 +20,85 @@ const STATUS_CONFIG = {
   hospitalizado:{ label: "Hospitalizado",color: "text-orange-400 bg-orange-900/30 border-orange-700"   },
 };
 
+// ─── V1.9 · TEMAS Y COLORES CLÍNICOS ─────────────────────────────────────
+const APP_THEMES = {
+  nocturno: { label:"Violeta nocturno", icon:"🌙", accent:"#8b5cf6", accent2:"#38bdf8", shell:"#080d13", card:"#131920", soft:"#0f172a", text:"#f8fafc" },
+  clinico:  { label:"Azul clínico",    icon:"🩺", accent:"#0ea5e9", accent2:"#22d3ee", shell:"#07111f", card:"#0f1b2d", soft:"#10243a", text:"#f8fafc" },
+  bosque:   { label:"Verde salud",     icon:"🌿", accent:"#10b981", accent2:"#a3e635", shell:"#07140f", card:"#0f1f19", soft:"#142b22", text:"#f8fafc" },
+  ambar:    { label:"Ámbar contraste", icon:"⚡", accent:"#f59e0b", accent2:"#fb7185", shell:"#151008", card:"#22190d", soft:"#2d2111", text:"#fff7ed" },
+  claro:    { label:"Claro minimal",   icon:"☀️", accent:"#0284c7", accent2:"#7c3aed", shell:"#f8fafc", card:"#ffffff", soft:"#f1f5f9", text:"#0f172a" },
+  neon:     { label:"Neón diagnóstico", icon:"🧪", accent:"#06b6d4", accent2:"#f472b6", shell:"#050914", card:"#0b1020", soft:"#111827", text:"#e0f2fe" },
+  coral:    { label:"Coral clínico", icon:"🪸", accent:"#ff4d6d", accent2:"#fb923c", shell:"#14070b", card:"#210c13", soft:"#2f111c", text:"#fff1f2" },
+  aurora:   { label:"Aurora profesional", icon:"🌌", accent:"#34d399", accent2:"#a78bfa", shell:"#04130f", card:"#0a1c18", soft:"#10251f", text:"#ecfeff" },
+  titanio:  { label:"Titanio púrpura", icon:"💎", accent:"#c084fc", accent2:"#67e8f9", shell:"#0b0714", card:"#171126", soft:"#201633", text:"#faf5ff" },
+  arcoiris: { label:"Arcoiris clínico", icon:"🌈", accent:"#f43f5e", accent2:"#22d3ee", shell:"#0b1020", card:"#111827", soft:"#182236", text:"#f8fafc" },
+};
+const APP_THEME_KEYS = Object.keys(APP_THEMES);
+
+// ─── V2.1 · ARCHIVOS CLÍNICOS / STORAGE ─────────────────────────────────
+const CLINICAL_FILES_BUCKET = "clinical-files";
+const MAX_CLINICAL_FILE_SIZE = 20 * 1024 * 1024;
+const CLINICAL_FILE_CATEGORIES = [
+  { id:"hemograma", label:"Hemograma" },
+  { id:"epicrisis", label:"Epicrisis" },
+  { id:"informe_clinico", label:"Informe clínico" },
+  { id:"informe_social", label:"Informe social" },
+  { id:"consentimiento", label:"Consentimiento" },
+  { id:"imagen", label:"Imagen" },
+  { id:"otro", label:"Otro" },
+];
+const CLINICAL_NOTE_TYPES = [
+  { id:"evolucion", label:"Evolución / comentario", icon:"✍️" },
+  { id:"gestion", label:"Gestión clínica", icon:"📌" },
+  { id:"riesgo", label:"Riesgo / seguridad", icon:"⚠️" },
+  { id:"familia", label:"Familia / red", icon:"👥" },
+  { id:"farmaco", label:"Fármacos", icon:"💊" },
+  { id:"administrativo", label:"Administrativo", icon:"🗂️" },
+];
+const getClinicalNoteType = (type) => CLINICAL_NOTE_TYPES.find(t => t.id === type) || CLINICAL_NOTE_TYPES[0];
+
+const ATTENDANCE_EVENT_TYPES = [
+  { id:"inasistencia", label:"Inasistencia", icon:"🚫", tone:"text-red-300 border-red-800 bg-red-950/25", description:"No se presenta a control/citación." },
+  { id:"postergacion", label:"Postergación / cambio de hora", icon:"↪️", tone:"text-amber-300 border-amber-800 bg-amber-950/25", description:"Cambia o posterga la hora antes de la atención." },
+  { id:"asistencia", label:"Asistencia registrada", icon:"✅", tone:"text-emerald-300 border-emerald-800 bg-emerald-950/25", description:"Asiste al control o contacto programado." },
+  { id:"cancelacion", label:"Cancelación justificada", icon:"🟦", tone:"text-sky-300 border-sky-800 bg-sky-950/25", description:"Cancela con aviso o justificación." },
+  { id:"contacto", label:"Contacto / gestión", icon:"☎️", tone:"text-violet-300 border-violet-800 bg-violet-950/25", description:"Contacto telefónico, coordinación o gestión administrativa." },
+];
+const getAttendanceEventType = (type) => ATTENDANCE_EVENT_TYPES.find(t => t.id === type) || ATTENDANCE_EVENT_TYPES[0];
+
+const getFileCategoryLabel = (category) => CLINICAL_FILE_CATEGORIES.find(c => c.id === category)?.label || "Archivo";
+const formatBytes = (bytes) => {
+  const n = Number(bytes || 0);
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+};
+const sanitizeStorageFileName = (name) => String(name || "archivo")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-zA-Z0-9._-]+/g, "_")
+  .replace(/^_+|_+$/g, "")
+  .slice(0, 120) || "archivo";
+
+const DX_COLOR_RULES = [
+  { key:"bipolar", label:"Bipolar", color:"#ec4899", keywords:["bipolar", "mania", "maní", "maniaco", "maníaco", "f31"] },
+  { key:"psicosis", label:"Psicosis", color:"#8b5cf6", keywords:["esquiz", "psicos", "psicótico", "psicotico", "f20", "f23", "f25"] },
+  { key:"depresion", label:"Depresión", color:"#3b82f6", keywords:["depres", "tdm", "f32", "f33"] },
+  { key:"ansiedad", label:"Ansiedad/TOC", color:"#22d3ee", keywords:["ansiedad", "toc", "pánico", "panico", "f41", "f42", "f40"] },
+  { key:"trauma", label:"Trauma/TEPT", color:"#f59e0b", keywords:["tept", "trauma", "estrés post", "estres post", "f43"] },
+  { key:"personalidad", label:"Personalidad", color:"#ef4444", keywords:["personalidad", "límite", "limite", "borderline", "f60"] },
+  { key:"sustancias", label:"Sustancias", color:"#f97316", keywords:["alcohol", "cannabis", "coca", "sustancia", "tabaco", "f10", "f12", "f19"] },
+  { key:"neurocognitivo", label:"Neurocognitivo", color:"#10b981", keywords:["demencia", "alzheimer", "neurocogn", "deterioro cogn", "f00"] },
+  { key:"tca", label:"TCA", color:"#fb7185", keywords:["anorexia", "bulimia", "tca", "conducta alimentaria", "f50"] },
+  { key:"tdah", label:"TDAH/Neurodesarrollo", color:"#84cc16", keywords:["tdah", "tea", "autismo", "neurodesarrollo", "f90", "f84"] },
+];
+
+const normalizeText = (value) => String(value || "")
+  .toLowerCase()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "");
+
 
 // ─── INSTITUCIONES / ESPACIOS DE TRABAJO ─────────────────────────────────
 const INSTITUTIONS = [
@@ -46,6 +125,7 @@ let ACTIVE_USER_ID = "admin";
 let USING_SUPABASE_DATA = false;
 let ACCESSIBLE_INSTITUTIONS = [...INSTITUTIONS];
 let ACTIVE_MEMBERSHIPS_BY_INSTITUTION = {};
+const PATIENT_LOCATION_CATEGORIES = [];
 
 const slugifyWorkspaceId = (value) => String(value || "")
   .trim()
@@ -93,6 +173,11 @@ const getAppUserIdForWorkspace = (workspaceId, fallback = "admin") => {
   return membership.role === "admin" ? "admin" : (membership.professionalId || fallback);
 };
 const normalizeRoleForApp = (role) => role === "terapeuta_ocupacional" ? "terapeuta" : role;
+const makeDisplayInitials = (nameOrEmail) => {
+  const base = String(nameOrEmail || "Usuario").replace(/@.*$/, "").trim();
+  const parts = base.split(/[\s._-]+/).filter(Boolean);
+  return (parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : base.slice(0, 2)).toUpperCase();
+};
 
 
 // ─── LOGIN REAL / MAPEO DE USUARIOS ───────────────────────────────────────
@@ -337,6 +422,14 @@ const RAW_FILES = [
   { id:"f5", name:"Registro_contacto_004.pdf",    size:"0.3 MB", date:"2024-09-28", author:"p8", patient:"PAC-004", type:"pdf" },
 ];
 
+const RAW_PATIENT_NOTES = [
+  { id:"pn1", patient:"PAC-001", author:"p1", authorName:"Dra. Valentina Rojas", type:"gestion", body:"Nota demo: revisar adherencia, red de apoyo y coordinación de control próximo.", createdAt:"2024-10-01 10:30", pinned:false },
+];
+
+const RAW_PATIENT_ATTENDANCE_EVENTS = [
+  { id:"att_demo_1", patient:"PAC-004", author:"p8", authorName:"T.S. Patricia Vergara", type:"inasistencia", eventDate:"2024-09-12", previousDate:"2024-09-12", newDate:"", reason:"No se presenta a control", notes:"Registro demo de inasistencia. Diferenciar de postergación o cambio de hora.", createdAt:"2024-09-12 12:30" },
+];
+
 
 // ─── ASIGNACIÓN MOCK POR INSTITUCIÓN ──────────────────────────────────────
 // En una versión con backend, este campo debería venir de la tabla institution_id
@@ -425,6 +518,11 @@ RAW_FILES.forEach(file => {
   file.author = mapHospitalProf(file.author, file.institution);
 });
 
+RAW_PATIENT_ATTENDANCE_EVENTS.forEach(event => {
+  event.institution = getRawPatientInstitution(event.patient);
+  event.author = mapHospitalProf(event.author, event.institution);
+});
+
 const createScopedCollection = (source, filterFn) => new Proxy(source, {
   get(target, prop) {
     const scoped = target.filter(filterFn);
@@ -450,19 +548,67 @@ const ADMIN_USER = {
   color: "bg-slate-600",
 };
 const CARE_TEAM_FIELDS = ["doctor", "psychologist", "ot", "nurse", "social"];
-const getPatientTeamIds = (patient) => CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
+const getLivePatient = (patient) => RAW_PATIENTS.find(p => p?.id === patient?.id || (p?._dbId && p._dbId === patient?._dbId)) || patient;
+const getPatientTeamRows = (patient) => {
+  const live = getLivePatient(patient);
+  const rows = [...(live?.teamMembers || []), ...(patient?.teamMembers || [])];
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = `${row?.professional_id || ""}:${row?.team_role || ""}`;
+    if (!row?.professional_id || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+const getPatientTeamIds = (patient) => {
+  const live = getLivePatient(patient);
+  const compact = CARE_TEAM_FIELDS.flatMap(field => [live?.[field], patient?.[field]]).filter(Boolean);
+  const expanded = getPatientTeamRows(patient).map(m => m.professional_id).filter(Boolean);
+  return Array.from(new Set([...compact, ...expanded]));
+};
+
+// v2.7: las tarjetas leen el paciente "vivo" desde RAW_PATIENTS y no solo
+// el objeto stale que quedó al abrir el modal. Así, si alguien toma tratancia,
+// las tarjetas muestran inmediatamente PD + SA u otros tratantes reales.
+const getPatientTeamDisplayIds = (patient, limit = 8) => {
+  const live = getLivePatient(patient);
+  const expandedRows = getPatientTeamRows(patient)
+    .filter(m => m?.professional_id && getProf(m.professional_id))
+    .sort((a, b) => Number(Boolean(b.is_primary)) - Number(Boolean(a.is_primary)) || String(a.team_role || '').localeCompare(String(b.team_role || '')));
+  const expanded = expandedRows.map(m => m.professional_id);
+  const compact = CARE_TEAM_FIELDS.flatMap(field => [live?.[field], patient?.[field]]).filter(Boolean);
+  return Array.from(new Set([...expanded, ...compact])).slice(0, limit);
+};
 const getCurrentUser = () => ACTIVE_USER_ID === "admin" ? ADMIN_USER : RAW_PROFESSIONALS.find(p => p.id === ACTIVE_USER_ID) || ADMIN_USER;
 const getUserOptions = () => [ADMIN_USER, ...RAW_PROFESSIONALS.filter(p => p.institution === ACTIVE_INSTITUTION_ID)];
+const getCurrentMembership = () => getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+const getCurrentProfessionalId = () => getCurrentMembership()?.professionalId || (ACTIVE_USER_ID !== "admin" ? ACTIVE_USER_ID : null);
+const isCurrentInstitutionAdmin = () => ACTIVE_USER_ID === "admin" || getCurrentMembership()?.role === "admin";
 const canAccessPatient = (patient) => Boolean(patient) && patient.institution === ACTIVE_INSTITUTION_ID && (
-  ACTIVE_USER_ID === "admin" || getPatientTeamIds(patient).includes(ACTIVE_USER_ID)
+  isCurrentInstitutionAdmin() || Boolean(getCurrentMembership()) || ACTIVE_USER_ID === "admin"
+);
+const canEditPatientInCurrentWorkspace = (patient) => Boolean(patient) && patient.institution === ACTIVE_INSTITUTION_ID && (
+  isCurrentInstitutionAdmin() || getPatientTeamIds(patient).includes(getCurrentProfessionalId())
 );
 const getVisiblePatientIds = () => new Set(RAW_PATIENTS.filter(canAccessPatient).map(p => p.id));
 const canAccessProfessional = (prof) => {
   if (!prof || prof.institution !== ACTIVE_INSTITUTION_ID) return false;
-  if (ACTIVE_USER_ID === "admin" || prof.id === ACTIVE_USER_ID) return true;
-  return RAW_PATIENTS.some(patient => canAccessPatient(patient) && getPatientTeamIds(patient).includes(prof.id));
+  return isCurrentInstitutionAdmin() || Boolean(getCurrentMembership()) || prof.id === ACTIVE_USER_ID;
 };
 const canAccessPatientLinkedItem = (item) => item?.institution === ACTIVE_INSTITUTION_ID && getVisiblePatientIds().has(item.patient);
+const roleToDefaultTeamRole = (role) => {
+  if (["psiquiatra", "psiquiatra_jefe"].includes(role)) return "psiquiatra";
+  if (role === "medico_general") return "medico";
+  if (role === "psicologo") return "psicologo";
+  if (role === "terapeuta_ocupacional" || role === "terapeuta") return "terapeuta_ocupacional";
+  if (role === "enfermero") return "enfermero";
+  if (role === "trabajador_social") return "trabajador_social";
+  if (role === "tens") return "tens";
+  if (role === "fonoaudiologo") return "fonoaudiologo";
+  if (role === "nutricionista") return "nutricionista";
+  if (role === "kinesiologo") return "kinesiologo";
+  return "otro";
+};
 
 const PROFESSIONALS = createScopedCollection(RAW_PROFESSIONALS, canAccessProfessional);
 const PATIENTS = createScopedCollection(RAW_PATIENTS, canAccessPatient);
@@ -472,6 +618,9 @@ const ALERTS = createScopedCollection(RAW_ALERTS, canAccessPatientLinkedItem);
 const TRACE_EVENTS = createScopedCollection(RAW_TRACE_EVENTS, canAccessPatientLinkedItem);
 const MESSAGES = createScopedCollection(RAW_MESSAGES, canAccessPatientLinkedItem);
 const FILES = createScopedCollection(RAW_FILES, canAccessPatientLinkedItem);
+const PATIENT_NOTES = createScopedCollection(RAW_PATIENT_NOTES, canAccessPatientLinkedItem);
+
+const PATIENT_ATTENDANCE_EVENTS = createScopedCollection(RAW_PATIENT_ATTENDANCE_EVENTS, canAccessPatientLinkedItem);
 
 const DEMO_TODAY = new Date().toISOString().slice(0, 10);
 const addDays = (dateStr, days) => {
@@ -507,6 +656,37 @@ const resetTrackingObject = (obj) => {
   Object.keys(obj).forEach(key => delete obj[key]);
 };
 
+const LOCATION_KIND_LABELS = { sector: "Sector", consultorio: "Consultorio" };
+const LOCATION_COLOR_OPTIONS = [
+  ["sky", "Azul"], ["violet", "Violeta"], ["emerald", "Verde"], ["amber", "Ámbar"],
+  ["rose", "Rosa"], ["cyan", "Cian"], ["orange", "Naranjo"], ["lime", "Lima"], ["slate", "Gris"], ["rainbow", "Arcoiris"]
+];
+const LOCATION_COLOR_STYLES = {
+  sky: "border-sky-700 bg-sky-950/30 text-sky-300",
+  violet: "border-violet-700 bg-violet-950/30 text-violet-300",
+  emerald: "border-emerald-700 bg-emerald-950/30 text-emerald-300",
+  amber: "border-amber-700 bg-amber-950/30 text-amber-300",
+  rose: "border-rose-700 bg-rose-950/30 text-rose-300",
+  cyan: "border-cyan-700 bg-cyan-950/30 text-cyan-300",
+  orange: "border-orange-700 bg-orange-950/30 text-orange-300",
+  lime: "border-lime-700 bg-lime-950/30 text-lime-300",
+  slate: "border-slate-700 bg-slate-900/60 text-slate-300",
+  rainbow: "border-fuchsia-600 bg-fuchsia-950/25 text-fuchsia-200",
+};
+const getPatientLocationCategories = (institution = ACTIVE_INSTITUTION_ID, kind = null, includeInactive = false) => PATIENT_LOCATION_CATEGORIES
+  .filter(c => c.institution === institution && (!kind || c.kind === kind) && (includeInactive || c.is_active !== false))
+  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.name).localeCompare(String(b.name)));
+const getLocationCategoryById = (id) => PATIENT_LOCATION_CATEGORIES.find(c => c.id === id || c._dbId === id) || null;
+const getPatientLocationLabel = (id) => getLocationCategoryById(id)?.name || "";
+const getPatientLocationColor = (id) => getLocationCategoryById(id)?.color || "slate";
+const LocationChip = ({ kind, id, fallback }) => {
+  const cat = getLocationCategoryById(id);
+  const label = cat?.name || fallback;
+  if (!label) return null;
+  const color = cat?.color || "slate";
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black ${LOCATION_COLOR_STYLES[color] || LOCATION_COLOR_STYLES.slate}`}>{kind === "sector" ? "📍" : "🏥"} {label}</span>;
+};
+
 const mapInstitutionFromDb = (institutionId, institutionById) => {
   const inst = institutionById.get(institutionId);
   return normalizeWorkspaceId(inst);
@@ -519,7 +699,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id,email,full_name,is_active")
+    .select("id,email,full_name,is_active,theme_preference")
     .eq("id", session.user.id)
     .single();
 
@@ -529,14 +709,15 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const { data: membershipsDb, error: membershipsError } = await supabase
     .from("memberships")
-    .select("id,user_id,institution_id,professional_id,role,is_default,is_active,created_at,institutions(id,slug,name,kind,description),professionals(id,full_name,role,specialty,email,initials,avatar_color)")
+    .select("id,user_id,institution_id,professional_id,role,status,is_default,is_active,created_at,institutions(id,slug,name,kind,description),professionals(id,full_name,role,specialty,email,initials,avatar_color)")
     .eq("user_id", session.user.id)
     .eq("is_active", true)
+    .eq("status", "approved")
     .order("is_default", { ascending: false })
     .order("created_at", { ascending: true });
 
   if (membershipsError) throw membershipsError;
-  if (!membershipsDb?.length) throw new Error("Tu usuario no tiene membresías institucionales activas. Revisa public.memberships.");
+  if (!membershipsDb?.length) throw new Error("Tu cuenta existe, pero aún no tiene acceso aprobado a ninguna institución. Pide a un superadmin o administrador institucional que te asigne permisos.");
 
   const [
     institutionsRes,
@@ -550,6 +731,9 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     traceRes,
     messagesRes,
     filesRes,
+    patientNotesRes,
+    attendanceEventsRes,
+    patientLocationCategoriesRes,
   ] = await Promise.all([
     supabase.from("institutions").select("*"),
     supabase.from("professionals").select("*").order("full_name"),
@@ -562,9 +746,12 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     supabase.from("trace_events").select("*").order("created_at", { ascending: false }),
     supabase.from("messages").select("*").order("created_at", { ascending: false }),
     supabase.from("files").select("*").order("created_at", { ascending: false }),
+    supabase.from("patient_notes").select("*").order("created_at", { ascending: false }),
+    supabase.from("patient_attendance_events").select("*").order("event_date", { ascending: false }).order("created_at", { ascending: false }),
+    supabase.from("patient_location_categories").select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
   ]);
 
-  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes];
+  const responses = [institutionsRes, professionalsRes, patientsRes, patientTeamRes, medicationsRes, clozapineRes, laiRes, alertsRes, traceRes, messagesRes, filesRes, patientNotesRes, attendanceEventsRes, patientLocationCategoriesRes];
   const firstError = responses.find(r => r.error)?.error;
   if (firstError) throw firstError;
 
@@ -579,6 +766,9 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const traceDb = traceRes.data || [];
   const messagesDb = messagesRes.data || [];
   const filesDb = filesRes.data || [];
+  const patientNotesDb = patientNotesRes.data || [];
+  const attendanceEventsDb = attendanceEventsRes.data || [];
+  const patientLocationCategoriesDb = patientLocationCategoriesRes.data || [];
 
   const institutionById = new Map(institutions.map(i => [i.id, i]));
   membershipsDb.forEach(m => {
@@ -624,15 +814,37 @@ const loadWorkspaceDataFromSupabase = async (session) => {
     _dbId: pr.id,
   }));
 
+  const patientLocationCategoryRows = patientLocationCategoriesDb.map(cat => ({
+    id: cat.id,
+    _dbId: cat.id,
+    institution: mapInstitutionFromDb(cat.institution_id, institutionById),
+    institutionDbId: cat.institution_id,
+    kind: cat.kind,
+    name: cat.name,
+    color: cat.color || "slate",
+    description: cat.description || "",
+    is_active: cat.is_active !== false,
+    sort_order: cat.sort_order ?? 0,
+  }));
+  replaceCollection(PATIENT_LOCATION_CATEGORIES, patientLocationCategoryRows);
+
   const patientCodeByUuid = new Map();
   const patientByUuid = new Map();
   const patientRows = patientsDb.map(p => {
     const row = {
-      id: p.clinical_code,
+      id: p.rut || p.clinical_code,
+      clinical_code: p.clinical_code,
+      rut: p.rut || p.clinical_code || "",
       _dbId: p.id,
       institution: mapInstitutionFromDb(p.institution_id, institutionById),
-      initials: p.initials,
-      age: p.age,
+      initials: p.full_name || p.initials,
+      full_name: p.full_name || p.initials || "Sin nombre registrado",
+      age: p.age ?? calculateAgeFromBirthDate(p.birth_date),
+      birth_date: p.birth_date || "",
+      email: p.email || "",
+      phone: p.phone || "",
+      address: p.address || "",
+      comuna: p.comuna || "",
       gender: p.gender || "NR",
       dx_main: p.dx_main || "Sin diagnóstico principal registrado",
       dx_secondary: Array.isArray(p.dx_secondary) ? p.dx_secondary : [],
@@ -645,6 +857,11 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       adherence: p.adherence || "—",
       functional: p.functional_status || "—",
       support: p.support_network || "—",
+      sector_id: p.sector_id || "",
+      consultorio_id: p.consultorio_id || "",
+      sector: getPatientLocationLabel(p.sector_id),
+      consultorio: getPatientLocationLabel(p.consultorio_id),
+      teamMembers: [],
       doctor: null,
       psychologist: null,
       ot: null,
@@ -658,7 +875,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       tasks: 0,
       notes: p.notes || "",
     };
-    patientCodeByUuid.set(p.id, p.clinical_code);
+    patientCodeByUuid.set(p.id, row.id);
     patientByUuid.set(p.id, row);
     return row;
   });
@@ -674,6 +891,17 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   patientTeamDb.forEach(team => {
     const patient = patientByUuid.get(team.patient_id);
+    if (patient) {
+      patient.teamMembers = patient.teamMembers || [];
+      patient.teamMembers.push({
+        id: `${team.patient_id}:${team.professional_id}:${team.team_role}`,
+        patient_id: team.patient_id,
+        professional_id: team.professional_id,
+        team_role: team.team_role || "otro",
+        is_primary: Boolean(team.is_primary),
+        created_at: team.created_at || null,
+      });
+    }
     const field = roleToPatientField(team.team_role);
     if (patient && field && (!patient[field] || team.is_primary)) patient[field] = team.professional_id;
   });
@@ -697,6 +925,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       nextControl: m.next_control_date,
       followup: m.followup || "",
       program: m.program || "general",
+      isActive: m.is_active !== false,
     });
     if (!patient.meds.includes(m.id)) patient.meds.push(m.id);
   });
@@ -812,13 +1041,59 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   const fileRows = filesDb.map(file => ({
     id: file.id,
+    _dbId: file.id,
     institution: mapInstitutionFromDb(file.institution_id, institutionById),
+    institutionDbId: file.institution_id,
     name: file.file_name,
-    size: file.file_size_bytes ? `${Math.round(file.file_size_bytes / 1024)} KB` : "—",
+    originalName: file.original_file_name || file.file_name,
+    size: formatBytes(file.file_size_bytes),
+    sizeBytes: file.file_size_bytes || 0,
     date: (file.created_at || "").slice(0, 10),
+    uploadedAt: file.created_at,
     author: file.uploaded_by,
     patient: patientCodeByUuid.get(file.patient_id) || null,
+    patientDbId: file.patient_id,
     type: file.file_type || "archivo",
+    category: file.file_category || "otro",
+    description: file.description || "",
+    storagePath: file.storage_path || "",
+  }));
+
+  const professionalNameById = new Map(professionalsDb.map(pr => [pr.id, pr.full_name]));
+  const noteRows = patientNotesDb.map(note => ({
+    id: note.id,
+    _dbId: note.id,
+    institution: mapInstitutionFromDb(note.institution_id, institutionById),
+    institutionDbId: note.institution_id,
+    patient: patientCodeByUuid.get(note.patient_id) || null,
+    patientDbId: note.patient_id,
+    author: note.author_professional_id || note.author_profile_id,
+    authorName: professionalNameById.get(note.author_professional_id) || profile.full_name || profile.email || "Usuario",
+    profileAuthor: note.author_profile_id,
+    type: note.note_type || "evolucion",
+    body: note.body || "",
+    pinned: Boolean(note.pinned),
+    createdAt: (note.created_at || "").replace("T", " ").slice(0, 16),
+    updatedAt: note.updated_at,
+  }));
+
+  const attendanceRows = attendanceEventsDb.map(event => ({
+    id: event.id,
+    _dbId: event.id,
+    institution: mapInstitutionFromDb(event.institution_id, institutionById),
+    institutionDbId: event.institution_id,
+    patient: patientCodeByUuid.get(event.patient_id) || null,
+    patientDbId: event.patient_id,
+    author: event.actor_professional_id || event.actor_profile_id,
+    authorName: professionalNameById.get(event.actor_professional_id) || profile.full_name || profile.email || "Usuario",
+    profileAuthor: event.actor_profile_id,
+    type: event.event_type || "inasistencia",
+    eventDate: event.event_date,
+    previousDate: event.previous_date || "",
+    newDate: event.new_date || "",
+    reason: event.reason || "",
+    notes: event.notes || "",
+    createdAt: (event.created_at || "").replace("T", " ").slice(0, 16),
   }));
 
   replaceCollection(RAW_PROFESSIONALS, professionalRows);
@@ -828,6 +1103,8 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   replaceCollection(RAW_TRACE_EVENTS, traceRows);
   replaceCollection(RAW_MESSAGES, messageRows);
   replaceCollection(RAW_FILES, fileRows);
+  replaceCollection(RAW_PATIENT_NOTES, noteRows);
+  replaceCollection(RAW_PATIENT_ATTENDANCE_EVENTS, attendanceRows);
   USING_SUPABASE_DATA = true;
 
   const defaultMembership = membershipRows.find(m => m.isDefault) || membershipRows[0];
@@ -839,6 +1116,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       label: profile.full_name || profile.email,
       role: defaultMembership?.role || "admin",
       email: profile.email,
+      themePreference: profile.theme_preference || null,
       memberships: membershipRows,
       membershipByInstitution: membershipRows.reduce((acc, m) => {
         acc[m.institution] = m;
@@ -946,16 +1224,233 @@ const ExportButton = ({ rows, filename, label = "Exportar para Excel" }) => (
   </button>
 );
 
+
+// ─── V2.0 · ACCIONES Y ALERTAS CLÍNICAS AUTOMÁTICAS ──────────────────────
+const OPEN_ALERT_STATUSES = new Set(["pendiente", "en_curso"]);
+const ACTION_PRIORITY_WEIGHT = { critico: 4, alto: 3, medio: 2, bajo: 1, no_evaluado: 0 };
+const isOpenAlert = (status) => OPEN_ALERT_STATUSES.has(status);
+const getPatientByCode = (code) => PATIENTS.find(p => p.id === code);
+const getPrimaryResponsible = (patient) => patient?.doctor || patient?.nurse || patient?.psychologist || patient?.social || patient?.ot || "";
+const normalizeDueDays = (date) => Number.isFinite(daysUntil(date)) ? daysUntil(date) : 9999;
+const clinicalActionTone = (priority) => {
+  if (priority === "critico") return "border-red-600 bg-red-950/30 text-red-300";
+  if (priority === "alto") return "border-orange-600 bg-orange-950/30 text-orange-300";
+  if (priority === "medio") return "border-yellow-600 bg-yellow-950/30 text-yellow-300";
+  return "border-slate-700 bg-slate-900/40 text-slate-300";
+};
+const clinicalActionDot = (priority) => {
+  if (priority === "critico") return "bg-red-500";
+  if (priority === "alto") return "bg-orange-500";
+  if (priority === "medio") return "bg-yellow-400";
+  return "bg-slate-500";
+};
+const getAutomaticClinicalActions = () => {
+  const actions = [];
+  const existingOpenAlerts = ALERTS.filter(a => isOpenAlert(a.status));
+
+  getClozapineRows().forEach(row => {
+    if (row.statusValue === "suspendido") return;
+    if (row.dias <= 7) {
+      actions.push({
+        id:`clozapina-${row.paciente}`,
+        source:"clozapina",
+        icon:"◆",
+        title: row.dias < 0 ? "Hemograma de clozapina vencido" : "Hemograma de clozapina próximo",
+        patient: row.paciente,
+        initials: row.iniciales,
+        priority: row.dias < 0 ? "alto" : "medio",
+        due: row.proximoHemograma,
+        dueDays: row.dias,
+        responsibleId: row.responsibleId,
+        responsibleName: row.responsable,
+        detail:`Próximo hemograma ${row.proximoHemograma || "sin fecha"}. Último: ${row.ultimoHemograma || "—"}. Neutrófilos/RAN: ${row.neutrofilos || "—"}.`,
+        recommendation:"Coordinar hemograma, revisar resultados y documentar continuidad del programa.",
+      });
+    }
+  });
+
+  getDepotRows().forEach(row => {
+    if (row.statusValue === "suspendido") return;
+    if (row.dias <= 7) {
+      actions.push({
+        id:`lai-${row.paciente}-${row.farmaco}`,
+        source:"lai",
+        icon:"◇",
+        title: row.dias < 0 ? "Inyectable de depósito atrasado" : "Inyectable de depósito próximo",
+        patient: row.paciente,
+        initials: row.iniciales,
+        priority: row.dias < 0 ? "alto" : "medio",
+        due: row.proximaAdministracion,
+        dueDays: row.dias,
+        responsibleId: row.responsibleId,
+        responsibleName: row.responsable,
+        detail:`${row.farmaco} ${row.dosis || ""}. Próxima administración: ${row.proximaAdministracion || "sin fecha"}. Sitio: ${row.sitio || "—"}.`,
+        recommendation:"Contactar paciente/equipo, registrar administración o reagendar dosis.",
+      });
+    }
+  });
+
+  PATIENTS.forEach(patient => {
+    if (patient.status === "alta" || patient.status === "derivado") return;
+    const resp = getPrimaryResponsible(patient);
+    const noControl = !patient.next_control;
+    const controlDays = patient.next_control ? normalizeDueDays(patient.next_control) : null;
+    if (noControl || controlDays < 0) {
+      actions.push({
+        id:`control-${patient.id}`,
+        source:"control",
+        icon:"⏱",
+        title: noControl ? "Paciente sin próximo control" : "Próximo control vencido",
+        patient: patient.id,
+        initials: patient.initials,
+        priority: patient.risk === "critico" || patient.risk === "alto" ? "alto" : "medio",
+        due: patient.next_control || DEMO_TODAY,
+        dueDays: noControl ? -999 : controlDays,
+        responsibleId: resp,
+        responsibleName: getProf(resp)?.name || "Sin responsable claro",
+        detail: noControl ? "No registra fecha de próximo control." : `Control programado para ${patient.next_control}.`,
+        recommendation:"Agendar control, confirmar contacto y actualizar fecha en ficha de coordinación.",
+      });
+    }
+
+    if (patient.status === "inasistente") {
+      const daysNoContact = patient.last_contact ? Math.abs(normalizeDueDays(patient.last_contact)) : null;
+      actions.push({
+        id:`inasistente-${patient.id}`,
+        source:"inasistencia",
+        icon:"△",
+        title:"Paciente inasistente",
+        patient: patient.id,
+        initials: patient.initials,
+        priority: patient.risk === "critico" || patient.suicide_risk === "alto" ? "critico" : "alto",
+        due: DEMO_TODAY,
+        dueDays: 0,
+        responsibleId: resp,
+        responsibleName: getProf(resp)?.name || "Sin responsable claro",
+        detail:`Último contacto: ${patient.last_contact || "sin registro"}${daysNoContact ? ` · ${daysNoContact} días aprox.` : ""}. Riesgo suicida: ${getRiskCfg(patient.suicide_risk).label}.`,
+        recommendation:"Intentar contacto, activar red de apoyo y escalar protocolo si corresponde.",
+      });
+    }
+
+    if (patient.risk === "critico") {
+      const lastContactDays = patient.last_contact ? Math.abs(normalizeDueDays(patient.last_contact)) : null;
+      if (!patient.last_contact || lastContactDays >= 3) {
+        actions.push({
+          id:`riesgo-critico-${patient.id}`,
+          source:"riesgo",
+          icon:"⚠",
+          title:"Riesgo crítico sin contacto reciente",
+          patient: patient.id,
+          initials: patient.initials,
+          priority:"critico",
+          due: DEMO_TODAY,
+          dueDays: 0,
+          responsibleId: resp,
+          responsibleName: getProf(resp)?.name || "Sin responsable claro",
+          detail:`Riesgo global crítico. Último contacto: ${patient.last_contact || "sin registro"}.`,
+          recommendation:"Revisar caso hoy, documentar plan de seguridad y responsables.",
+        });
+      }
+    }
+  });
+
+  existingOpenAlerts
+    .filter(a => a.priority === "critico" || (a.due && normalizeDueDays(a.due) <= 0))
+    .forEach(a => {
+      const patient = getPatientByCode(a.patient);
+      actions.push({
+        id:`alerta-${a.id}`,
+        source:"alerta",
+        icon:"●",
+        title:a.title,
+        patient:a.patient,
+        initials:patient?.initials || a.patient || "—",
+        priority:a.priority || "medio",
+        due:a.due || DEMO_TODAY,
+        dueDays:a.due ? normalizeDueDays(a.due) : 0,
+        responsibleId:a.responsible,
+        responsibleName:getProf(a.responsible)?.name || "Sin responsable claro",
+        detail:a.comment || "Alerta abierta.",
+        recommendation:"Resolver, actualizar estado o documentar curso de acción.",
+      });
+    });
+
+  const dedup = new Map();
+  actions.forEach(action => {
+    const key = `${action.source}-${action.patient}-${action.title}`;
+    const existing = dedup.get(key);
+    if (!existing || ACTION_PRIORITY_WEIGHT[action.priority] > ACTION_PRIORITY_WEIGHT[existing.priority]) dedup.set(key, action);
+  });
+  return Array.from(dedup.values()).sort((a, b) => {
+    const pa = ACTION_PRIORITY_WEIGHT[b.priority] - ACTION_PRIORITY_WEIGHT[a.priority];
+    if (pa !== 0) return pa;
+    return (a.dueDays ?? 9999) - (b.dueDays ?? 9999);
+  });
+};
+
+const ClinicalActionPanel = ({ setPage, compact = false, maxItems = 6, actionsOverride = null }) => {
+  const actions = actionsOverride || getAutomaticClinicalActions();
+  const today = actions.filter(a => a.priority === "critico" || a.dueDays <= 0).length;
+  const week = actions.filter(a => a.dueDays > 0 && a.dueDays <= 7).length;
+  const items = compact ? actions.slice(0, maxItems) : actions;
+  return (
+    <div className="rounded-2xl border border-red-900/50 bg-red-950/10 p-4 shadow-xl shadow-black/20">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-black text-slate-100">Acciones clínicas automáticas</div>
+          <div className="text-xs text-slate-500">V2.0 calcula prioridades desde riesgo, controles, clozapina, inyectables e inasistencias.</div>
+        </div>
+        <div className="flex gap-2">
+          <span className="rounded-full border border-red-700 bg-red-900/20 px-2.5 py-1 text-[10px] font-black text-red-300">Hoy: {today}</span>
+          <span className="rounded-full border border-yellow-700 bg-yellow-900/20 px-2.5 py-1 text-[10px] font-black text-yellow-300">7 días: {week}</span>
+          {compact && <button onClick={() => setPage?.("acciones")} className="rounded-full border border-sky-700 bg-sky-900/20 px-2.5 py-1 text-[10px] font-black text-sky-300">Ver tablero →</button>}
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-emerald-800 bg-emerald-950/20 p-3 text-sm text-emerald-300">Sin acciones automáticas urgentes para este contexto.</div>
+      ) : (
+        <div className="space-y-2">
+          {items.map(action => (
+            <div key={action.id} className={`rounded-xl border p-3 ${clinicalActionTone(action.priority)}`}>
+              <div className="flex items-start gap-3">
+                <span className={`mt-1 h-2.5 w-2.5 rounded-full ${clinicalActionDot(action.priority)} shadow-lg`}></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-black text-slate-100">{action.icon} {action.title}</span>
+                    <span className="rounded-full border border-slate-700 bg-slate-900/40 px-2 py-0.5 text-[10px] font-black text-slate-400">{action.patient || "sin paciente"}</span>
+                    <RiskBadge risk={action.priority} small />
+                    {Number.isFinite(action.dueDays) && <span className="text-[10px] font-mono text-slate-500">{action.dueDays < 0 ? `${Math.abs(action.dueDays)} días atrasado` : action.dueDays === 0 ? "hoy" : `${action.dueDays} días`}</span>}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">{action.detail}</div>
+                  {!compact && <div className="mt-1 text-xs text-slate-300"><span className="font-bold text-slate-200">Sugerencia:</span> {action.recommendation}</div>}
+                  <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-500">
+                    <ProfAvatar id={action.responsibleId} size="sm" />
+                    <span>{action.responsibleName || "Sin responsable claro"}</span>
+                    <span>·</span>
+                    <span>{action.source}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 const getProf = (id) => PROFESSIONALS.find(p => p.id === id);
 const getRiskCfg = (r) => RISK_CONFIG[r] || RISK_CONFIG.no_evaluado;
 const getStatusCfg = (s) => STATUS_CONFIG[s] || STATUS_CONFIG.activo;
 
 const ROLE_LABELS = {
-  psiquiatra_jefe:"Psiquiatra Jefe", psiquiatra:"Psiquiatra",
+  admin:"Administrador/a", psiquiatra_jefe:"Psiquiatra Jefe", psiquiatra:"Psiquiatra",
   medico_general:"Médico General", psicologo:"Psicólogo/a",
-  terapeuta:"Terapeuta Ocupacional", enfermero:"Enfermero/a",
-  trabajador_social:"Trabajador/a Social", admin:"Administrador/a"
+  terapeuta:"Terapeuta Ocupacional", terapeuta_ocupacional:"Terapeuta Ocupacional",
+  enfermero:"Enfermero/a", tens:"TENS", trabajador_social:"Trabajador/a Social",
+  fonoaudiologo:"Fonoaudiólogo/a", nutricionista:"Nutricionista", kinesiologo:"Kinesiólogo/a",
+  solo_lectura:"Solo lectura", otro:"Otro"
 };
 
 // ─── PEQUEÑOS COMPONENTES ─────────────────────────────────────────────────
@@ -1001,54 +1496,62 @@ const Disclaimer = () => (
 const getNavItems = () => ([
   { id:"dashboard",       label:"Dashboard",              icon:"⬡" },
   { id:"pacientes",       label:"Pacientes",              icon:"◉" },
+  { id:"acciones",        label:"Acciones clínicas",      icon:"⚕", badge: getAutomaticClinicalActions().filter(a => a.priority === "critico" || a.dueDays <= 0).length },
   { id:"profesionales",   label:"Profesionales",          icon:"◈" },
   { id:"alertas",         label:"Alertas y Controles",    icon:"△", badge: ALERTS.filter(a=>a.status==="pendiente").length },
   { id:"farmacoterapia",  label:"Farmacoterapia",         icon:"⬡" },
   { id:"clozapina",       label:"Programa Clozapina",      icon:"◆", badge: getClozapineRows().filter(r=>r.dias <= 7).length },
   { id:"inyectables",     label:"Inyectables Depósito",    icon:"◇", badge: getDepotRows().filter(r=>r.dias <= 7).length },
   { id:"trazabilidad",    label:"Trazabilidad",           icon:"◫" },
+  { id:"archivos",        label:"Archivos clínicos",      icon:"▣" },
   { id:"estadisticas",    label:"Estadísticas",           icon:"▦" },
   { id:"inbox",           label:"Inbox / Chat",           icon:"◻", badge: MESSAGES.filter(m=>!m.read).length },
   { id:"configuracion",   label:"Configuración",          icon:"⊙" },
 ]);
 
-const Sidebar = ({ active, setActive }) => (
-  <aside className="w-56 bg-[#0d1117] border-r border-slate-800 flex flex-col h-screen sticky top-0 flex-shrink-0">
-    <div className="px-4 py-5 border-b border-slate-800">
-      <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 bg-sky-600 rounded-lg flex items-center justify-center text-white font-black text-sm">CC</div>
-        <div>
-          <div className="text-white font-bold text-sm leading-none">ClinCoord</div>
-          <div className="text-slate-500 text-[10px] font-medium tracking-wider uppercase">Mental Health</div>
+const Sidebar = ({ active, setActive, authProfile }) => {
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const displayName = membership?.professionalName || authProfile?.label || authProfile?.email || "Usuario";
+  const displayRole = membership?.role ? (ROLE_LABELS[normalizeRoleForApp(membership.role)] || membership.role) : "Usuario clínico";
+  const initials = makeDisplayInitials(displayName);
+  return (
+    <aside className="w-56 bg-[#0d1117] border-r border-slate-800 flex flex-col h-screen sticky top-0 flex-shrink-0">
+      <div className="px-4 py-5 border-b border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-sky-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-lg shadow-sky-950/40">CC</div>
+          <div>
+            <div className="text-white font-bold text-sm leading-none">ClinCoord</div>
+            <div className="text-slate-500 text-[10px] font-medium tracking-wider uppercase">Mental Health</div>
+          </div>
         </div>
       </div>
-    </div>
-    <nav className="flex-1 py-3 overflow-y-auto">
-      {getNavItems().map(item => (
-        <button key={item.id} onClick={() => setActive(item.id)}
-          className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative
-            ${active === item.id
-              ? "bg-sky-600/10 text-sky-400 border-r-2 border-sky-400"
-              : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"}`}>
-          <span className="text-base w-4 text-center flex-shrink-0">{item.icon}</span>
-          <span className="font-medium">{item.label}</span>
-          {item.badge > 0 && (
-            <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{item.badge}</span>
-          )}
-        </button>
-      ))}
-    </nav>
-    <div className="p-3 border-t border-slate-800">
-      <div className="flex items-center gap-2">
-        <div className="w-7 h-7 bg-violet-600 rounded-full flex items-center justify-center text-white text-xs font-bold">VR</div>
-        <div className="min-w-0">
-          <div className="text-xs text-white font-medium truncate">Dra. V. Rojas</div>
-          <div className="text-[10px] text-slate-500">Psiquiatra Jefe</div>
+      <nav className="flex-1 py-3 overflow-y-auto">
+        {getNavItems().map(item => (
+          <button key={item.id} onClick={() => setActive(item.id)}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative
+              ${active === item.id
+                ? "bg-sky-600/10 text-sky-400 border-r-2 border-sky-400"
+                : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"}`}>
+            <span className="text-base w-4 text-center flex-shrink-0">{item.icon}</span>
+            <span className="font-medium">{item.label}</span>
+            {item.badge > 0 && (
+              <span className="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{item.badge}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-slate-800">
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 p-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-sky-500 to-violet-600 rounded-full flex items-center justify-center text-white text-xs font-black shadow-lg shadow-sky-950/40">{initials}</div>
+          <div className="min-w-0">
+            <div className="text-xs text-white font-black truncate">{displayName}</div>
+            <div className="text-[10px] text-slate-500 truncate">{displayRole}</div>
+          </div>
         </div>
       </div>
-    </div>
-  </aside>
-);
+    </aside>
+  );
+};
 
 // ─── TOPBAR ────────────────────────────────────────────────────────────────
 const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitution, activeUser, setActiveUser, authLocked = false, authEmail, onLogout }) => (
@@ -1065,40 +1568,58 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v1.1-MVP</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.6.3</div>
     </div>
   </header>
 );
 
 
 // ─── CAMBIO DE VERSIÓN WEB / APP MÓVIL ───────────────────────────────────
-const ViewModeToggle = ({ mode, setMode }) => {
-  const isMobile = mode === "mobile";
-  return (
-    <button
-      onClick={() => setMode(isMobile ? "desktop" : "mobile")}
-      className="fixed top-3 right-3 z-[80] inline-flex items-center gap-2 rounded-full border border-sky-500/60 bg-sky-600/95 px-3 py-2 text-xs font-bold text-white shadow-xl shadow-black/40 backdrop-blur hover:bg-sky-500 transition-colors"
-      aria-label={isMobile ? "Cambiar a versión web" : "Cambiar a versión móvil"}
-      title={isMobile ? "Cambiar a versión web" : "Cambiar a versión móvil"}
-    >
-      <span className="text-sm">{isMobile ? "🖥️" : "📱"}</span>
-      <span>{isMobile ? "Ver web" : "Ver móvil"}</span>
-    </button>
-  );
+const ViewModeToggle = ({ mode, setMode, autoIsMobile, embedded = false }) => {
+  const effective = mode === "auto" ? (autoIsMobile ? "mobile" : "desktop") : mode;
+  const options = [
+    { value:"auto", label:`Auto (${autoIsMobile ? "móvil" : "web"})`, icon:"⚙️" },
+    { value:"desktop", label:"Forzar web", icon:"🖥️" },
+    { value:"mobile", label:"Forzar móvil", icon:"📱" },
+  ];
+  if (embedded) {
+    return (
+      <div className="grid gap-2 sm:grid-cols-3">
+        {options.map(opt => {
+          const active = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setMode(opt.value)}
+              className={`rounded-2xl border px-4 py-3 text-left transition-all ${active ? "border-sky-500 bg-sky-600/15 text-sky-200 shadow-lg shadow-sky-950/30" : "border-slate-800 bg-slate-900/50 text-slate-400 hover:border-slate-600 hover:text-slate-200"}`}
+            >
+              <div className="text-lg">{opt.icon}</div>
+              <div className="mt-1 text-xs font-black">{opt.label}</div>
+              <div className="mt-1 text-[10px] text-slate-500">{opt.value === "auto" ? "Detecta celular/escritorio sin molestar." : opt.value === "desktop" ? "Útil si quieres ver la versión completa." : "Útil para probar modo app."}</div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  return null;
 };
 
 
 const ThemeToggle = ({ themeMode, setThemeMode }) => {
-  const isLight = themeMode === "light";
+  const keys = APP_THEME_KEYS;
+  const cfg = APP_THEMES[themeMode] || APP_THEMES.nocturno;
+  const nextKey = keys[(keys.indexOf(themeMode) + 1) % keys.length] || keys[0];
   return (
     <button
-      onClick={() => setThemeMode(isLight ? "dark" : "light")}
-      className="fixed top-3 right-32 z-[80] inline-flex items-center gap-2 rounded-full border border-slate-500/50 bg-slate-900/90 px-3 py-2 text-xs font-bold text-slate-100 shadow-xl shadow-black/30 backdrop-blur hover:bg-slate-800 transition-colors light-control"
-      aria-label={isLight ? "Cambiar a modo oscuro" : "Cambiar a modo claro"}
-      title={isLight ? "Cambiar a modo oscuro" : "Cambiar a modo claro"}
+      onClick={() => setThemeMode(nextKey)}
+      className="fixed top-3 right-40 z-[80] inline-flex items-center gap-2 rounded-full border border-slate-500/50 bg-slate-900/90 px-3 py-2 text-xs font-bold text-slate-100 shadow-xl shadow-black/30 backdrop-blur hover:bg-slate-800 transition-colors light-control"
+      aria-label="Cambiar tema visual"
+      title="Cambia entre 10 temas visuales por usuario"
     >
-      <span className="text-sm">{isLight ? "🌙" : "☀️"}</span>
-      <span>{isLight ? "Oscuro" : "Claro"}</span>
+      <span className="text-sm">{cfg.icon}</span>
+      <span>{cfg.label}</span>
     </button>
   );
 };
@@ -1274,6 +1795,25 @@ const calculateNextDate = (date, days) => {
   if (!d || !n) return "";
   return addDays(d, n);
 };
+
+const normalizeRutValue = (value) => String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+const makeInitialsFromName = (name) => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "S/N";
+  if (parts.length === 1) return parts[0].slice(0, 3).toUpperCase();
+  return parts.slice(0, 3).map(x => x[0]).join(".").toUpperCase() + ".";
+};
+const calculateAgeFromBirthDate = (birthDate) => {
+  const d = emptyToNull(birthDate);
+  if (!d) return null;
+  const date = new Date(`${d}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - date.getFullYear();
+  const m = today.getMonth() - date.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < date.getDate())) age -= 1;
+  return age >= 0 && age <= 130 ? age : null;
+};
 const CLINICAL_PROGRAM_STATUS_OPTIONS = ["vigente", "proximo", "atrasado", "suspendido"];
 const inferProgramStatus = (nextDate) => {
   const d = daysUntil(nextDate);
@@ -1294,6 +1834,24 @@ const TEAM_FIELD_CONFIG = [
   { field:"social",       label:"Trabajo social",       teamRole:"trabajador_social",       allowed:["trabajador_social"] },
 ];
 
+const TEAM_ROLE_OPTIONS = [
+  ["psiquiatra", "Psiquiatra / médico"],
+  ["psicologo", "Psicólogo/a"],
+  ["terapeuta_ocupacional", "Terapia ocupacional"],
+  ["enfermero", "Enfermería"],
+  ["tens", "TENS"],
+  ["trabajador_social", "Trabajo social"],
+  ["fonoaudiologo", "Fonoaudiología"],
+  ["nutricionista", "Nutrición"],
+  ["kinesiologo", "Kinesiología"],
+  ["otro", "Otro integrante"],
+];
+const TEAM_ROLE_LABELS = Object.fromEntries(TEAM_ROLE_OPTIONS);
+const getTeamRoleLabel = (role) => TEAM_ROLE_LABELS[role] || ROLE_LABELS[role] || role || "Equipo";
+const getAssignableProfessionals = () => RAW_PROFESSIONALS
+  .filter(p => p.institution === ACTIVE_INSTITUTION_ID && p.is_active !== false && p.role !== "solo_lectura")
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const getTeamOptionsForField = (field) => {
   const cfg = TEAM_FIELD_CONFIG.find(x => x.field === field);
   const allowed = cfg?.allowed || [];
@@ -1311,6 +1869,15 @@ const getInstitutionIdForWorkspace = async (workspaceId) => {
   if (error) throw error;
   if (!data?.id) throw new Error("No se encontró la institución activa en Supabase.");
   return data.id;
+};
+
+// v2.7.1: función sincrónica para operaciones ya cargadas desde Supabase.
+// Evita el error "getInstitutionDbId is not defined" al guardar fármacos.
+const getInstitutionDbId = (workspaceId = ACTIVE_INSTITUTION_ID) => {
+  const membershipDbId = getMembershipForWorkspace(workspaceId)?.institutionDbId;
+  if (membershipDbId) return membershipDbId;
+  const inst = getAccessibleInstitutions().find(i => i.id === workspaceId);
+  return inst?._dbId || inst?.institutionDbId || null;
 };
 
 const getCurrentDbProfile = async (authSession, workspaceId = ACTIVE_INSTITUTION_ID) => {
@@ -1362,12 +1929,231 @@ const insertTraceEvent = async ({ institutionId, patientId, authSession, action,
   });
 };
 
-const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy = false) => {
+
+
+const buildMedicationPayload = (form, patient, authSession) => {
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  return {
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    drug: String(form.drug || "").trim(),
+    dose: emptyToNull(form.dose),
+    scheme: emptyToNull(form.scheme),
+    frequency: emptyToNull(form.frequency),
+    start_date: emptyToNull(form.start_date),
+    last_adjustment_date: emptyToNull(form.last_adjustment_date),
+    next_control_date: emptyToNull(form.next_control_date),
+    prescriber_professional_id: emptyToNull(form.prescriber_professional_id || getCurrentProfessionalId()),
+    followup: emptyToNull(form.followup),
+    program: form.program || "general",
+    is_active: form.is_active !== false,
+  };
+};
+
+const saveMedicationForPatient = async ({ patient, medication, form, authSession }) => {
+  if (!isSupabaseConfigured) {
+    const newId = medication?.id || `med_${Date.now()}`;
+    const row = {
+      id: newId,
+      _dbId: null,
+      institution: ACTIVE_INSTITUTION_ID,
+      drug: form.drug,
+      dose: form.dose,
+      scheme: form.scheme,
+      freq: form.frequency,
+      startDate: form.start_date,
+      lastAdj: form.last_adjustment_date,
+      prescriber: form.prescriber_professional_id || getCurrentProfessionalId(),
+      nextControl: form.next_control_date,
+      followup: form.followup,
+      program: form.program || "general",
+      isActive: form.is_active !== false,
+    };
+    const idx = RAW_MEDICATIONS.findIndex(m => m.id === newId);
+    if (idx >= 0) RAW_MEDICATIONS[idx] = { ...RAW_MEDICATIONS[idx], ...row };
+    else RAW_MEDICATIONS.push(row);
+    const rawPatient = getLivePatient(patient) || patient;
+    if (rawPatient && !rawPatient.meds.includes(newId)) rawPatient.meds.push(newId);
+    return newId;
+  }
+  if (!canEditPatientInCurrentWorkspace(patient)) throw new Error("Necesitas ser tratante activo o administrador para modificar fármacos.");
+  const payload = buildMedicationPayload(form, patient, authSession);
+  if (!payload.drug) throw new Error("Debes escribir el nombre del fármaco.");
+  let result;
+  if (medication?._dbId) {
+    result = await supabase.from("medications").update(payload).eq("id", medication._dbId).select("id").single();
+  } else {
+    result = await supabase.from("medications").insert(payload).select("id").single();
+  }
+  if (result.error) throw result.error;
+  await insertTraceEvent({
+    institutionId: payload.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: medication?._dbId ? "Fármaco actualizado" : "Fármaco agregado",
+    field: "medications.drug",
+    previousValue: medication?.drug || null,
+    nextValue: `${payload.drug}${payload.dose ? ` ${payload.dose}` : ""}`,
+    eventType: "edicion",
+  });
+  return result.data?.id;
+};
+
+const discontinueMedicationForPatient = async ({ patient, medication, authSession }) => {
+  if (!medication) return;
+  if (!isSupabaseConfigured) {
+    const idx = RAW_MEDICATIONS.findIndex(m => m.id === medication.id);
+    if (idx >= 0) RAW_MEDICATIONS[idx] = { ...RAW_MEDICATIONS[idx], isActive: false, followup: `SUSPENDIDO. ${RAW_MEDICATIONS[idx].followup || ""}`.trim() };
+    return;
+  }
+  if (!canEditPatientInCurrentWorkspace(patient)) throw new Error("Necesitas ser tratante activo o administrador para suspender fármacos.");
+  if (!medication?._dbId) throw new Error("Este fármaco no tiene identificador de base de datos.");
+  const { error } = await supabase.from("medications").update({
+    is_active: false,
+    followup: `SUSPENDIDO. ${medication.followup || ""}`.trim(),
+    last_adjustment_date: new Date().toISOString().slice(0, 10),
+  }).eq("id", medication._dbId);
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId: getInstitutionDbId(ACTIVE_INSTITUTION_ID),
+    patientId: patient._dbId,
+    authSession,
+    action: "Fármaco suspendido",
+    field: "medications.is_active",
+    previousValue: medication.drug,
+    nextValue: "suspendido",
+    eventType: "edicion",
+  });
+};
+
+
+const alertDefaultForm = () => ({
+  title: "",
+  type: "tarea",
+  priority: "medio",
+  due_date: todayIso(),
+  responsible_professional_id: getCurrentProfessionalId() || "",
+  comment: "",
+});
+
+const saveCustomAlertForPatient = async ({ patient, form, authSession }) => {
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)) throw new Error("Necesitas pertenecer a la institución para crear alertas.");
+  const title = String(form.title || "").trim();
+  if (!title) throw new Error("Escribe un título breve para la alerta.");
   const payload = {
     institution_id: institutionId,
-    clinical_code: String(form.clinical_code || "").trim().toUpperCase(),
-    initials: String(form.initials || "").trim().toUpperCase(),
-    age: parseOptionalInt(form.age),
+    patient_id: patient._dbId,
+    title,
+    type: form.type || "tarea",
+    priority: form.priority || "medio",
+    status: "pendiente",
+    due_date: emptyToNull(form.due_date) || todayIso(),
+    responsible_professional_id: emptyToNull(form.responsible_professional_id || getCurrentProfessionalId()),
+    comment: emptyToNull(form.comment),
+    created_by: authSession?.user?.id || null,
+  };
+  if (!isSupabaseConfigured) {
+    RAW_ALERTS.push({
+      id: `alert_${Date.now()}`,
+      institution: ACTIVE_INSTITUTION_ID,
+      patient: patient.id,
+      title: payload.title,
+      type: payload.type,
+      priority: payload.priority,
+      status: payload.status,
+      due: payload.due_date,
+      responsible: payload.responsible_professional_id,
+      comment: payload.comment || "",
+    });
+    return;
+  }
+  const { data, error } = await supabase.from("alerts").insert(payload).select("id").single();
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId,
+    patientId: patient._dbId,
+    authSession,
+    action: "Alerta personalizada creada",
+    field: "alerts.title",
+    previousValue: null,
+    nextValue: title,
+    eventType: "alerta",
+  });
+  return data?.id;
+};
+
+const resolvePatientAlert = async ({ patient, alert, authSession }) => {
+  if (!alert?.id) return;
+  const institutionId = getInstitutionDbId(ACTIVE_INSTITUTION_ID);
+  if (!institutionId) throw new Error("No se encontró la institución activa.");
+  if (!getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)) throw new Error("Necesitas pertenecer a la institución para resolver alertas.");
+  if (!isSupabaseConfigured) {
+    const idx = RAW_ALERTS.findIndex(a => a.id === alert.id);
+    if (idx >= 0) RAW_ALERTS[idx] = { ...RAW_ALERTS[idx], status: "resuelto" };
+    return;
+  }
+  const { error } = await supabase.from("alerts").update({
+    status: "resuelto",
+    resolved_at: new Date().toISOString(),
+  }).eq("id", alert.id);
+  if (error) throw error;
+  await insertTraceEvent({
+    institutionId,
+    patientId: patient?._dbId || null,
+    authSession,
+    action: "Alerta resuelta",
+    field: "alerts.status",
+    previousValue: alert.title,
+    nextValue: "resuelto",
+    eventType: "alerta",
+  });
+};
+
+const takePatientTreatmentInSupabase = async ({ patient, teamRole, isPrimary, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const { error } = await supabase.rpc("clincoord_take_patient_care", {
+    p_patient_id: patient._dbId,
+    p_team_role: teamRole || roleToDefaultTeamRole(getCurrentMembership()?.role),
+    p_is_primary: Boolean(isPrimary),
+  });
+  if (error) throw error;
+};
+
+const leavePatientTreatmentInSupabase = async ({ patient, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const { error } = await supabase.rpc("clincoord_leave_patient_care", {
+    p_patient_id: patient._dbId,
+    p_team_role: teamRole || null,
+  });
+  if (error) throw error;
+};
+
+const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy = false) => {
+  const rut = normalizeRutValue(form.rut || form.clinical_code);
+  const fullName = String(form.full_name || form.initials || "").trim();
+  const birthDate = emptyToNull(form.birth_date);
+  const calculatedAge = calculateAgeFromBirthDate(birthDate);
+  const payload = {
+    institution_id: institutionId,
+    clinical_code: rut,
+    rut,
+    initials: makeInitialsFromName(fullName),
+    full_name: fullName,
+    age: parseOptionalInt(form.age) ?? calculatedAge,
+    birth_date: birthDate,
+    email: emptyToNull(form.email),
+    phone: emptyToNull(form.phone),
+    address: emptyToNull(form.address),
+    comuna: emptyToNull(form.comuna),
     gender: form.gender || "NR",
     dx_main: emptyToNull(form.dx_main),
     dx_secondary: splitSecondaryDx(form.dx_secondary),
@@ -1384,6 +2170,8 @@ const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy 
     last_contact_date: emptyToNull(form.last_contact_date),
     next_control_date: emptyToNull(form.next_control_date),
     notes: emptyToNull(form.notes),
+    sector_id: emptyToNull(form.sector_id),
+    consultorio_id: emptyToNull(form.consultorio_id),
   };
   if (includeCreatedBy) payload.created_by = authSession?.user?.id || null;
   return payload;
@@ -1408,6 +2196,105 @@ const buildTeamRowsForRpc = (team) => TEAM_FIELD_CONFIG
     is_primary: item.cfg.field === "doctor",
   }));
 
+const savePatientTeamMemberToSupabase = async ({ patient, professionalId, teamRole, isPrimary, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  if (!professionalId) throw new Error("Selecciona un profesional.");
+  if (!teamRole) throw new Error("Selecciona un rol dentro del equipo.");
+
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  if (isPrimary) {
+    await supabase
+      .from("patient_team")
+      .update({ is_primary: false })
+      .eq("patient_id", patient._dbId)
+      .eq("team_role", teamRole);
+  }
+
+  const { error } = await supabase.from("patient_team").upsert({
+    patient_id: patient._dbId,
+    professional_id: professionalId,
+    team_role: teamRole,
+    is_primary: Boolean(isPrimary),
+  }, { onConflict: "patient_id,professional_id,team_role" });
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Equipo tratante actualizado",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: null,
+    nextValue: getProf(professionalId)?.name || professionalId,
+    eventType: "edicion",
+  });
+};
+
+const removePatientTeamMemberFromSupabase = async ({ patient, professionalId, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  const { error } = await supabase
+    .from("patient_team")
+    .delete()
+    .eq("patient_id", patient._dbId)
+    .eq("professional_id", professionalId)
+    .eq("team_role", teamRole);
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Integrante removido del equipo tratante",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: getProf(professionalId)?.name || professionalId,
+    nextValue: null,
+    eventType: "edicion",
+  });
+};
+
+const setPrimaryPatientTeamMemberInSupabase = async ({ patient, professionalId, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  const { error: clearError } = await supabase
+    .from("patient_team")
+    .update({ is_primary: false })
+    .eq("patient_id", patient._dbId)
+    .eq("team_role", teamRole);
+  if (clearError) throw clearError;
+
+  const { error } = await supabase
+    .from("patient_team")
+    .update({ is_primary: true })
+    .eq("patient_id", patient._dbId)
+    .eq("professional_id", professionalId)
+    .eq("team_role", teamRole);
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Profesional principal actualizado",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: null,
+    nextValue: getProf(professionalId)?.name || professionalId,
+    eventType: "edicion",
+  });
+};
+
 const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitution, authSession, authProfile }) => {
   if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
@@ -1419,20 +2306,26 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   const institutionId = dbProfile.institution_id;
 
   const payload = buildPatientPayload(form, institutionId, authSession, mode === "create");
-  if (!payload.clinical_code) throw new Error("El código clínico es obligatorio.");
-  if (!payload.initials) throw new Error("Las iniciales son obligatorias.");
+  if (!payload.rut) throw new Error("El RUT es obligatorio.");
+  if (!payload.full_name) throw new Error("El nombre completo es obligatorio.");
 
   if (mode === "create") {
-    if (!isAdmin) throw new Error("Solo un administrador de la institución puede crear pacientes nuevos. Entra con admin@clincoord.demo o h-admin@clincoord.demo.");
 
     // v1.6: la creación se hace por RPC multi-institución.
     // La función recibe explícitamente la institución activa y Supabase valida
     // que el usuario sea admin de esa institución mediante memberships.
-    const { data, error } = await supabase.rpc("clincoord_create_patient_v2", {
+    const { data, error } = await supabase.rpc("clincoord_create_patient_v3", {
       p_institution_id: institutionId,
       p_clinical_code: payload.clinical_code,
+      p_rut: payload.rut,
+      p_full_name: payload.full_name,
       p_initials: payload.initials,
       p_age: payload.age,
+      p_birth_date: payload.birth_date,
+      p_email: payload.email,
+      p_phone: payload.phone,
+      p_address: payload.address,
+      p_comuna: payload.comuna,
       p_gender: payload.gender,
       p_dx_main: payload.dx_main,
       p_dx_secondary: payload.dx_secondary,
@@ -1454,10 +2347,21 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
     if (error) throw error;
 
     if (!data) throw new Error("El paciente fue creado, pero Supabase no devolvió su identificador.");
+    const locationUpdate = {
+      sector_id: payload.sector_id || null,
+      consultorio_id: payload.consultorio_id || null,
+    };
+    if (locationUpdate.sector_id || locationUpdate.consultorio_id) {
+      const { error: locationError } = await supabase.from("patients").update(locationUpdate).eq("id", data);
+      if (locationError) throw locationError;
+    }
     return { id: data, clinical_code: payload.clinical_code };
   }
 
   if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  if (!isAdmin && !getPatientTeamIds(patient).includes(dbProfile.professional_id)) {
+    throw new Error("Puedes ver este paciente por pertenecer a la institución, pero para modificarlo debes tomar tratancia primero.");
+  }
   const { error } = await supabase
     .from("patients")
     .update(payload)
@@ -1490,10 +2394,45 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   return { id: patient._dbId, clinical_code: payload.clinical_code };
 };
 
+const patientSafetyActionInSupabase = async ({ action, patient, reason, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const trimmedReason = (reason || "").trim();
+  if (trimmedReason.length < 8) throw new Error("Debes escribir un motivo claro, mínimo 8 caracteres.");
+
+  if (action === "archive") {
+    const { error } = await supabase.rpc("clincoord_archive_patient_v1", {
+      p_patient_id: patient._dbId,
+      p_reason: trimmedReason,
+    });
+    if (error) throw error;
+    return;
+  }
+
+  if (action === "delete") {
+    const { error } = await supabase.rpc("clincoord_delete_patient_v1", {
+      p_patient_id: patient._dbId,
+      p_reason: trimmedReason,
+    });
+    if (error) throw error;
+    return;
+  }
+
+  throw new Error("Acción no reconocida.");
+};
+
 const defaultPatientForm = () => ({
   clinical_code:"",
+  rut:"",
   initials:"",
+  full_name:"",
+  birth_date:"",
   age:"",
+  email:"",
+  phone:"",
+  address:"",
+  comuna:"",
   gender:"NR",
   dx_main:"",
   dx_secondary:"",
@@ -1509,13 +2448,22 @@ const defaultPatientForm = () => ({
   admission_date:new Date().toISOString().slice(0, 10),
   last_contact_date:new Date().toISOString().slice(0, 10),
   next_control_date:"",
+  sector_id:"",
+  consultorio_id:"",
   notes:"",
 });
 
 const patientToForm = (patient) => ({
-  clinical_code: patient?.id || "",
+  clinical_code: patient?.clinical_code || patient?.rut || patient?.id || "",
+  rut: patient?.rut || patient?.id || "",
   initials: patient?.initials || "",
+  full_name: patient?.full_name || patient?.initials || "",
+  birth_date: patient?.birth_date || "",
   age: patient?.age ?? "",
+  email: patient?.email || "",
+  phone: patient?.phone || "",
+  address: patient?.address || "",
+  comuna: patient?.comuna || "",
   gender: patient?.gender || "NR",
   dx_main: patient?.dx_main || "",
   dx_secondary: Array.isArray(patient?.dx_secondary) ? patient.dx_secondary.join("; ") : "",
@@ -1531,6 +2479,8 @@ const patientToForm = (patient) => ({
   admission_date: patient?.admission || "",
   last_contact_date: patient?.last_contact || "",
   next_control_date: patient?.next_control || "",
+  sector_id: patient?.sector_id || "",
+  consultorio_id: patient?.consultorio_id || "",
   notes: patient?.notes || "",
 });
 
@@ -1578,9 +2528,10 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
   const [team, setTeam] = useState(() => mode === "edit" ? patientToTeam(patient) : patientToTeam(null));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
   const canManageTeam = isAdmin;
-  const canCreate = mode !== "create" || isAdmin;
+  const canCreate = mode !== "create" || Boolean(membership || ACTIVE_USER_ID === "admin");
   const updateForm = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
   const updateTeam = (key, value) => setTeam(prev => ({ ...prev, [key]: value }));
 
@@ -1605,9 +2556,9 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
       <form onSubmit={submit} className="my-4 w-full max-w-4xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/50" onClick={e => e.stopPropagation()}>
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-800 bg-[#131920]/95 p-5 backdrop-blur">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">Etapa 6.1 · Pacientes reales</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6 · Identificación y contacto</div>
             <h2 className="mt-1 text-xl font-black text-white">{mode === "create" ? "Nuevo paciente" : `Editar ${patient?.id}`}</h2>
-            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. El equipo tratante controla qué profesionales podrán ver el caso.</p>
+            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. Cualquier profesional aprobado puede crear pacientes; el RUT evita duplicados y el equipo tratante controla accesos posteriores.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-bold text-slate-300 hover:bg-slate-800">✕</button>
         </div>
@@ -1615,7 +2566,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
         <div className="space-y-5 p-5">
           {!canCreate && (
             <div className="rounded-2xl border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-200">
-              En esta versión, por seguridad, solo el administrador puede crear pacientes nuevos. Los profesionales pueden editar casos que ya tienen asignados.
+              Tu usuario no tiene una membresía activa en esta institución. Los profesionales aprobados pueden crear pacientes; el equipo tratante lo puede ajustar un administrador.
             </div>
           )}
           {error && <div className="rounded-2xl border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
@@ -1623,15 +2574,50 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
             <div className="mb-3 text-sm font-black text-slate-100">Datos básicos</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div><FieldLabel>Código clínico</FieldLabel><TextInput required value={form.clinical_code} onChange={v => updateForm("clinical_code", v)} placeholder="CMP-005" /></div>
-              <div><FieldLabel>Iniciales</FieldLabel><TextInput required value={form.initials} onChange={v => updateForm("initials", v)} placeholder="A.B.C." /></div>
+              <div><FieldLabel>RUT</FieldLabel><TextInput required value={form.rut} onChange={v => { updateForm("rut", v); updateForm("clinical_code", v); }} placeholder="12.345.678-9" /></div>
+              <div className="md:col-span-2"><FieldLabel>Nombre completo</FieldLabel><TextInput required value={form.full_name} onChange={v => updateForm("full_name", v)} placeholder="Nombre y apellidos" /></div>
+              <div><FieldLabel>Fecha nacimiento</FieldLabel><TextInput type="date" value={form.birth_date} onChange={v => { updateForm("birth_date", v); if (!form.age) updateForm("age", calculateAgeFromBirthDate(v) ?? ""); }} /></div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-5">
               <div><FieldLabel>Edad</FieldLabel><TextInput type="number" value={form.age} onChange={v => updateForm("age", v)} /></div>
               <div><FieldLabel>Género</FieldLabel><SelectInput value={form.gender} onChange={v => updateForm("gender", v)}><option value="NR">No registrado</option><option value="F">F</option><option value="M">M</option><option value="X">X</option></SelectInput></div>
+              <div><FieldLabel>Email</FieldLabel><TextInput type="email" value={form.email} onChange={v => updateForm("email", v)} placeholder="correo@dominio.cl" /></div>
+              <div><FieldLabel>Fono</FieldLabel><TextInput value={form.phone} onChange={v => updateForm("phone", v)} placeholder="+56 9 ..." /></div>
+              <div><FieldLabel>Comuna</FieldLabel><TextInput value={form.comuna} onChange={v => updateForm("comuna", v)} placeholder="Comuna" /></div>
             </div>
+            <div className="mt-3"><FieldLabel>Dirección</FieldLabel><TextInput value={form.address} onChange={v => updateForm("address", v)} placeholder="Dirección de contacto" /></div>
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div><FieldLabel>Diagnóstico principal</FieldLabel><TextAreaInput rows={2} value={form.dx_main} onChange={v => updateForm("dx_main", v)} placeholder="Diagnóstico de trabajo" /></div>
               <div><FieldLabel>Diagnósticos secundarios</FieldLabel><TextAreaInput rows={2} value={form.dx_secondary} onChange={v => updateForm("dx_secondary", v)} placeholder="Separar con punto y coma" /></div>
             </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-black text-slate-100">Ubicación institucional</div>
+              <div className="text-[10px] text-slate-500">Administra estas categorías en Configuración → Sectores y consultorios</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <FieldLabel>Sector / unidad / letra</FieldLabel>
+                <SelectInput value={form.sector_id} onChange={v => updateForm("sector_id", v)}>
+                  <option value="">Sin sector</option>
+                  {getPatientLocationCategories(activeInstitution, "sector").map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                </SelectInput>
+              </div>
+              <div>
+                <FieldLabel>Consultorio / policlínico inscrito</FieldLabel>
+                <SelectInput value={form.consultorio_id} onChange={v => updateForm("consultorio_id", v)}>
+                  <option value="">Sin consultorio</option>
+                  {getPatientLocationCategories(activeInstitution, "consultorio").map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                </SelectInput>
+              </div>
+            </div>
+            {getPatientLocationCategories(activeInstitution).length === 0 && (
+              <div className="mt-3 rounded-xl border border-amber-800 bg-amber-950/20 p-3 text-xs text-amber-200">
+                Todavía no hay sectores ni consultorios configurados para esta institución. Puedes crear categorías propias desde Configuración.
+              </div>
+            )}
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
@@ -1651,7 +2637,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
-            <div className="mb-3 text-sm font-black text-slate-100">Contexto clínico-funcional</div>
+            <div className="mb-3 text-sm font-black text-slate-100">Contexto clínico-funcional y apoyo</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div><FieldLabel>Sustancias</FieldLabel><TextInput value={form.substances} onChange={v => updateForm("substances", v)} /></div>
               <div><FieldLabel>Adherencia</FieldLabel><TextInput value={form.adherence} onChange={v => updateForm("adherence", v)} /></div>
@@ -1686,6 +2672,170 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           <button type="submit" disabled={saving || !canCreate} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
             {saving ? "Guardando…" : mode === "create" ? "Crear paciente" : "Guardar cambios"}
           </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+const medicationDefaultForm = (medication = null) => ({
+  drug: medication?.drug || "",
+  dose: medication?.dose || "",
+  scheme: medication?.scheme || "",
+  frequency: medication?.freq || "",
+  start_date: medication?.startDate || new Date().toISOString().slice(0, 10),
+  last_adjustment_date: medication?.lastAdj || "",
+  next_control_date: medication?.nextControl || "",
+  prescriber_professional_id: medication?.prescriber || getCurrentProfessionalId() || "",
+  followup: medication?.followup || "",
+  program: medication?.program || "general",
+  is_active: medication?.isActive !== false,
+});
+
+const MedicationFormModal = ({ patient, medication, authSession, onClose, onSaved }) => {
+  const [form, setForm] = useState(() => medicationDefaultForm(medication));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const prescriberOptions = getResponsibleOptions();
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await saveMedicationForPatient({ patient, medication, form, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo guardar el fármaco.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const suspend = async () => {
+    if (!medication) return;
+    if (!confirm(`¿Suspender ${medication.drug}? Quedará en la ficha como inactivo.`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await discontinueMedicationForPatient({ patient, medication, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo suspender el fármaco.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70">
+        <div className="border-b border-slate-800 bg-[#131920] p-4">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-400">v2.7 · Farmacoterapia editable</div>
+          <h3 className="mt-1 text-xl font-black text-white">{medication ? "Editar fármaco" : "Agregar fármaco"}</h3>
+          <p className="text-xs text-slate-500">Paciente: <span className="font-bold text-slate-300">{patient.full_name || patient.initials}</span>. Solo tratantes activos o administradores pueden modificar tratamientos.</p>
+        </div>
+        <div className="max-h-[calc(92vh-150px)] space-y-4 overflow-y-auto p-4">
+          {error && <div className="rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div><FieldLabel>Fármaco</FieldLabel><TextInput required value={form.drug} onChange={v => update("drug", v)} placeholder="Ej: Escitalopram" /></div>
+            <div><FieldLabel>Dosis</FieldLabel><TextInput value={form.dose} onChange={v => update("dose", v)} placeholder="Ej: 10 mg" /></div>
+            <div><FieldLabel>Esquema</FieldLabel><TextInput value={form.scheme} onChange={v => update("scheme", v)} placeholder="Ej: 1-0-0 / 0-0-1 / SOS" /></div>
+            <div><FieldLabel>Frecuencia</FieldLabel><TextInput value={form.frequency} onChange={v => update("frequency", v)} placeholder="Ej: Matutino, cada 12 horas" /></div>
+            <div><FieldLabel>Fecha de inicio</FieldLabel><TextInput type="date" value={form.start_date} onChange={v => update("start_date", v)} /></div>
+            <div><FieldLabel>Último ajuste</FieldLabel><TextInput type="date" value={form.last_adjustment_date} onChange={v => update("last_adjustment_date", v)} /></div>
+            <div><FieldLabel>Próximo control farmacológico</FieldLabel><TextInput type="date" value={form.next_control_date} onChange={v => update("next_control_date", v)} /></div>
+            <div><FieldLabel>Programa</FieldLabel><SelectInput value={form.program} onChange={v => update("program", v)}>
+              <option value="general">General</option>
+              <option value="clozapine">Clozapina</option>
+              <option value="lai">Inyectable depósito / LAI</option>
+            </SelectInput></div>
+            <div><FieldLabel>Prescriptor/responsable</FieldLabel><SelectInput value={form.prescriber_professional_id} onChange={v => update("prescriber_professional_id", v)}>
+              <option value="">Sin responsable</option>
+              {prescriberOptions.map(p => <option key={p.id} value={p.id}>{p.name} · {ROLE_LABELS[p.role] || p.role}</option>)}
+            </SelectInput></div>
+            <label className="flex items-end gap-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-3 text-sm font-bold text-slate-300">
+              <input type="checkbox" checked={form.is_active} onChange={e => update("is_active", e.target.checked)} />
+              Tratamiento activo
+            </label>
+          </div>
+          <div><FieldLabel>Seguimiento / indicación / motivo</FieldLabel><TextAreaInput rows={4} value={form.followup} onChange={v => update("followup", v)} placeholder="Ej: evaluar respuesta, control metabólico, RAM, suspensión, indicaciones…" /></div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 bg-[#0d1117]/95 p-4">
+          <div>{medication && medication.isActive !== false && <button type="button" onClick={suspend} disabled={saving} className="rounded-2xl border border-red-800 px-4 py-2 text-sm font-black text-red-300 hover:bg-red-950/30 disabled:opacity-50">Suspender</button>}</div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+            <button type="submit" disabled={saving || !form.drug.trim()} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Guardando…" : "Guardar fármaco"}</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+const CustomAlertFormModal = ({ patient, authSession, onClose, onSaved }) => {
+  const [form, setForm] = useState(() => alertDefaultForm());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const responsibleOptions = getResponsibleOptions();
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await saveCustomAlertForPatient({ patient, form, authSession });
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo crear la alerta.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="w-full max-w-3xl overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70">
+        <div className="border-b border-slate-800 bg-[#131920] p-4">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-400">v2.8 · Alerta personalizada</div>
+          <h3 className="mt-1 text-xl font-black text-white">Nueva alerta / pendiente</h3>
+          <p className="text-xs text-slate-500">Paciente: <span className="font-bold text-slate-300">{patient.full_name || patient.initials}</span>. Úsala para solicitudes, llamados, recetas, informes, gestiones familiares o tareas clínicas breves.</p>
+        </div>
+        <div className="space-y-4 p-4">
+          {error && <div className="rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+          <div><FieldLabel>Título breve</FieldLabel><TextInput required value={form.title} onChange={v => update("title", v)} placeholder="Ej: Madre llamó por receta / paciente pidió informe" /></div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div><FieldLabel>Tipo</FieldLabel><SelectInput value={form.type} onChange={v => update("type", v)}>
+              <option value="tarea">Tarea / gestión</option>
+              <option value="control">Control / seguimiento</option>
+              <option value="administrativo">Administrativo</option>
+              <option value="farmaco">Fármaco / receta</option>
+              <option value="riesgo">Riesgo / seguridad</option>
+              <option value="reunion">Reunión / coordinación</option>
+              <option value="otro">Otro</option>
+            </SelectInput></div>
+            <div><FieldLabel>Prioridad</FieldLabel><SelectInput value={form.priority} onChange={v => update("priority", v)}>
+              <option value="bajo">Baja</option>
+              <option value="medio">Media</option>
+              <option value="alto">Alta</option>
+              <option value="critico">Crítica</option>
+            </SelectInput></div>
+            <div><FieldLabel>Fecha límite</FieldLabel><TextInput type="date" value={form.due_date} onChange={v => update("due_date", v)} /></div>
+          </div>
+          <div><FieldLabel>Responsable</FieldLabel><SelectInput value={form.responsible_professional_id} onChange={v => update("responsible_professional_id", v)}>
+            <option value="">Sin responsable / equipo</option>
+            {responsibleOptions.map(p => <option key={p.id} value={p.id}>{p.name} · {ROLE_LABELS[p.role] || p.role}</option>)}
+          </SelectInput></div>
+          <div><FieldLabel>Detalle / comentario</FieldLabel><TextAreaInput rows={5} value={form.comment} onChange={v => update("comment", v)} placeholder="Ej: Hija vino a pedir certificado. Revisar antecedentes y dejar listo antes del viernes." /></div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-800 bg-[#0d1117]/95 p-4">
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar</button>
+          <button type="submit" disabled={saving || !form.title.trim()} className="rounded-2xl bg-fuchsia-600 px-5 py-2 text-sm font-black text-white hover:bg-fuchsia-500 disabled:opacity-50">{saving ? "Guardando…" : "Crear alerta"}</button>
         </div>
       </form>
     </div>
@@ -2076,22 +3226,276 @@ const ClinicalProgramModal = ({ type, row, authSession, onClose, onSaved }) => {
   );
 };
 
+// ─── NOTAS CLÍNICAS / COMENTARIOS DE TARJETA ─────────────────────────────
+const getPatientNotes = (patientCode) => PATIENT_NOTES
+  .filter(n => n.patient === patientCode)
+  .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
+const getLatestPatientNote = (patientCode) => getPatientNotes(patientCode)[0] || null;
+
+const savePatientNoteToSupabase = async ({ patient, body, noteType, authSession }) => {
+  const text = String(body || "").trim();
+  if (!text) throw new Error("Escribe un comentario antes de guardar.");
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId) {
+    throw new Error("Las notas clínicas requieren Supabase y un paciente guardado en la base de datos.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+
+  const { error } = await supabase.from("patient_notes").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    author_profile_id: authSession.user.id,
+    author_professional_id: membership?.professionalId || null,
+    note_type: noteType || "evolucion",
+    body: text,
+    pinned: false,
+  });
+  if (error) throw error;
+};
+
+const getPatientAttendanceEvents = (patientCode) => PATIENT_ATTENDANCE_EVENTS
+  .filter(e => e.patient === patientCode)
+  .sort((a, b) => String(b.eventDate || b.createdAt || "").localeCompare(String(a.eventDate || a.createdAt || "")));
+
+const getPatientAttendanceStats = (patientCode) => {
+  const events = getPatientAttendanceEvents(patientCode);
+  return {
+    total: events.length,
+    inasistencias: events.filter(e => e.type === "inasistencia").length,
+    postergaciones: events.filter(e => e.type === "postergacion").length,
+    asistencias: events.filter(e => e.type === "asistencia").length,
+    ultima: events[0] || null,
+  };
+};
+
+const syncPatientAttendanceDerivedStatus = async ({ patient, eventType, eventDate }) => {
+  if (!isSupabaseConfigured || !patient?._dbId) return;
+  if (eventType === "inasistencia") {
+    await supabase.from("patients").update({ status: "inasistente", last_contact_date: eventDate || new Date().toISOString().slice(0, 10) }).eq("id", patient._dbId);
+    return;
+  }
+  const { count, error } = await supabase
+    .from("patient_attendance_events")
+    .select("id", { count: "exact", head: true })
+    .eq("patient_id", patient._dbId)
+    .eq("event_type", "inasistencia");
+  if (!error && Number(count || 0) === 0 && patient?.status === "inasistente") {
+    await supabase.from("patients").update({ status: "activo" }).eq("id", patient._dbId);
+  }
+};
+
+const savePatientAttendanceEventToSupabase = async ({ patient, form, authSession }) => {
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId) {
+    throw new Error("El registro de asistencia requiere Supabase y un paciente guardado en la base de datos.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+  const eventType = form?.type || "inasistencia";
+  const eventDate = form?.eventDate || new Date().toISOString().slice(0, 10);
+  const reason = String(form?.reason || "").trim();
+  const notes = String(form?.notes || "").trim();
+
+  const { error } = await supabase.from("patient_attendance_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    event_type: eventType,
+    event_date: eventDate,
+    previous_date: form?.previousDate || null,
+    new_date: form?.newDate || null,
+    reason: reason || null,
+    notes: notes || null,
+  });
+  if (error) throw error;
+
+  await syncPatientAttendanceDerivedStatus({ patient, eventType, eventDate });
+
+  await supabase.from("trace_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    action: eventType === "inasistencia" ? "Inasistencia registrada" : eventType === "postergacion" ? "Hora postergada/cambiada" : "Evento de asistencia registrado",
+    field: "patient_attendance_events.event_type",
+    previous_value: null,
+    next_value: `${getAttendanceEventType(eventType).label} · ${eventDate}`,
+    event_type: "edicion",
+  });
+};
+
+const updatePatientAttendanceEventInSupabase = async ({ patient, attendanceEvent, form, authSession }) => {
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId || !attendanceEvent?._dbId) {
+    throw new Error("No se pudo identificar el registro de asistencia a corregir.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+  const eventType = form?.type || "inasistencia";
+  const eventDate = form?.eventDate || new Date().toISOString().slice(0, 10);
+  const reason = String(form?.reason || "").trim();
+  const notes = String(form?.notes || "").trim();
+
+  const { error } = await supabase
+    .from("patient_attendance_events")
+    .update({
+      event_type: eventType,
+      event_date: eventDate,
+      previous_date: form?.previousDate || null,
+      new_date: form?.newDate || null,
+      reason: reason || null,
+      notes: notes || null,
+    })
+    .eq("id", attendanceEvent._dbId)
+    .eq("patient_id", patient._dbId);
+  if (error) throw error;
+
+  await syncPatientAttendanceDerivedStatus({ patient, eventType, eventDate });
+
+  await supabase.from("trace_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    action: "Registro de asistencia corregido",
+    field: "patient_attendance_events",
+    previous_value: `${getAttendanceEventType(attendanceEvent.type).label} · ${attendanceEvent.eventDate || attendanceEvent.createdAt || ""}`,
+    next_value: `${getAttendanceEventType(eventType).label} · ${eventDate}`,
+    event_type: "edicion",
+  });
+};
+
+const deletePatientAttendanceEventInSupabase = async ({ patient, attendanceEvent, authSession }) => {
+  if (!isSupabaseConfigured || !authSession?.user?.id || !patient?._dbId || !attendanceEvent?._dbId) {
+    throw new Error("No se pudo identificar el registro de asistencia a eliminar.");
+  }
+  const membership = getMembershipForWorkspace(patient.institution || ACTIVE_INSTITUTION_ID);
+  const institutionId = membership?.institutionDbId;
+  if (!institutionId) throw new Error("No se pudo identificar la institución activa.");
+
+  const { error } = await supabase
+    .from("patient_attendance_events")
+    .delete()
+    .eq("id", attendanceEvent._dbId)
+    .eq("patient_id", patient._dbId);
+  if (error) throw error;
+
+  await syncPatientAttendanceDerivedStatus({ patient, eventType: attendanceEvent.type === "inasistencia" ? "correccion" : attendanceEvent.type, eventDate: attendanceEvent.eventDate });
+
+  await supabase.from("trace_events").insert({
+    institution_id: institutionId,
+    patient_id: patient._dbId,
+    actor_profile_id: authSession.user.id,
+    actor_professional_id: membership?.professionalId || null,
+    action: "Registro de asistencia eliminado/corregido",
+    field: "patient_attendance_events",
+    previous_value: `${getAttendanceEventType(attendanceEvent.type).label} · ${attendanceEvent.eventDate || attendanceEvent.createdAt || ""}`,
+    next_value: "Eliminado por corrección",
+    event_type: "edicion",
+  });
+};
+
 // ─── PATIENT CARD ──────────────────────────────────────────────────────────
-const PatientCard = ({ patient, onClick }) => {
+const getPatientDxTags = (patient) => {
+  const dxParts = [patient?.dx_main, ...(Array.isArray(patient?.dx_secondary) ? patient.dx_secondary : [])];
+  const haystack = normalizeText(dxParts.join(" | "));
+  const found = DX_COLOR_RULES.filter(rule => rule.keywords.some(k => haystack.includes(normalizeText(k))));
+  if (!found.length && patient?.dx_main) return [{ key:"otro", label:"Otro dx", color:"#64748b" }];
+  return found.slice(0, 6);
+};
+
+const getDxRingStyle = (patient) => {
+  const tags = getPatientDxTags(patient);
+  if (!tags.length) return {};
+  const shadows = tags.slice(0, 6).map((tag, i) => `0 0 0 ${i * 3 + 1}px ${tag.color}${i === 0 ? "f2" : "9d"}`);
+  shadows.push(`0 0 22px ${tags[0].color}55`);
+  return {
+    borderColor: tags[0].color,
+    boxShadow: shadows.join(", "),
+  };
+};
+
+const patientSearchHaystack = (p) => {
+  const teamNames = [p.doctor, p.psychologist, p.ot, p.nurse, p.social]
+    .map(pid => getProf(pid)?.name || pid)
+    .join(" ");
+  const alerts = ALERTS.filter(a => a.patient === p.id).map(a => `${a.title} ${a.comment} ${a.priority} ${a.status}`).join(" ");
+  const meds = (p.meds || []).map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean).map(m => `${m.drug} ${m.dose} ${m.scheme} ${m.followup}`).join(" ");
+  const noteText = getPatientNotes(p.id).map(n => `${n.body} ${getClinicalNoteType(n.type).label} ${n.authorName}`).join(" ");
+  const attendanceText = getPatientAttendanceEvents(p.id).map(e => `${getAttendanceEventType(e.type).label} ${e.reason || ""} ${e.notes || ""} ${e.eventDate || ""}`).join(" ");
+  const cloz = CLOZAPINE_TRACKING[p.id] ? "clozapina hemograma programa" : "";
+  const lai = DEPOT_TRACKING[p.id] ? "inyectable deposito lai depot" : "";
+  return normalizeText([
+    p.id, p.rut, p.full_name, p.initials, p.birth_date, p.email, p.phone, p.address, p.comuna, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
+    p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
+    p.support, p.notes, p.sector, p.consultorio, noteText, attendanceText, p.next_control, teamNames, alerts, meds, cloz, lai,
+    ...getPatientDxTags(p).map(t => t.label),
+  ].join(" "));
+};
+
+const QUICK_PATIENT_FILTERS = [
+  { id:"all", label:"Todos", fn: () => true },
+  { id:"mis", label:"Mis pacientes", fn: p => ACTIVE_USER_ID === "admin" || [p.doctor,p.psychologist,p.ot,p.nurse,p.social].includes(ACTIVE_USER_ID) },
+  { id:"criticos", label:"Críticos/alto", fn: p => ["critico","alto"].includes(p.risk) || ["critico","alto"].includes(p.suicide_risk) },
+  { id:"clozapina", label:"Clozapina", fn: p => Boolean(CLOZAPINE_TRACKING[p.id]) || (p.meds || []).some(mid => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes("clozapina")) },
+  { id:"lai", label:"LAI/depot", fn: p => Boolean(DEPOT_TRACKING[p.id]) || (p.meds || []).some(mid => ["lai","depot","paliperidona","risperidona"].some(k => normalizeText(MEDICATIONS.find(m => m.id === mid)?.drug).includes(k))) },
+  { id:"sin_control", label:"Sin control", fn: p => !p.next_control },
+  { id:"inasistentes", label:"Inasistentes", fn: p => p.status === "inasistente" || getPatientAttendanceStats(p.id).inasistencias > 0 },
+  { id:"postergados", label:"Postergados", fn: p => getPatientAttendanceStats(p.id).postergaciones > 0 },
+  { id:"alertas", label:"Con alertas", fn: p => (p.alerts || 0) > 0 || ALERTS.some(a => a.patient === p.id && a.status !== "resuelto") },
+];
+
+const PatientCard = ({ patient, onClick, compact = false }) => {
   const rc = getRiskCfg(patient.risk);
-  const sc = getStatusCfg(patient.status);
-  const doctor = getProf(patient.doctor);
-  const psych  = getProf(patient.psychologist);
+  const dxTags = getPatientDxTags(patient);
+  const ringStyle = getDxRingStyle(patient);
+  const latestNote = getLatestPatientNote(patient.id);
+  if (compact) {
+    return (
+      <div onClick={() => onClick(patient)} style={ringStyle}
+        className="rounded-2xl border bg-[#131920] px-3 py-2 cursor-pointer hover:bg-[#1a2332] transition-all">
+        <div className="flex items-center gap-3">
+          <div className="w-20 shrink-0">
+            <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+            <div className="text-sm font-black text-white truncate">{patient.full_name || patient.initials}</div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex flex-wrap gap-1">
+              <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+              <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+            </div>
+            <div className="truncate text-xs font-semibold text-slate-200">{patient.dx_main || "Sin diagnóstico principal"}</div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {dxTags.slice(0, 4).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-bold" style={{ borderColor:t.color, color:t.color }}>{t.label}</span>)}
+              {(patient.dx_secondary?.length || 0) > 4 && <span className="text-[9px] text-slate-500">+{patient.dx_secondary.length - 4}</span>}
+            </div>
+          </div>
+          {latestNote && <div className="hidden max-w-[220px] truncate rounded-full border border-sky-800/70 bg-sky-950/30 px-2 py-1 text-[10px] text-sky-200 md:block">✍ {latestNote.body}</div>}
+          <RiskBadge risk={patient.risk} small />
+          <StatusBadge status={patient.status} />
+          <div className="hidden w-28 text-right text-[10px] text-slate-500 sm:block">{patient.next_control || "Sin control"}</div>
+        </div>
+      </div>
+    );
+  }
   return (
-    <div onClick={() => onClick(patient)}
-      className={`bg-[#131920] border ${rc.border} rounded-xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-lg hover:shadow-black/30 group relative overflow-hidden`}>
+    <div onClick={() => onClick(patient)} style={ringStyle}
+      className={`bg-gradient-to-br from-slate-900/95 via-[#131920] to-slate-950/95 border ${rc.border} rounded-3xl p-4 cursor-pointer hover:bg-[#1a2332] transition-all hover:shadow-2xl hover:shadow-sky-950/20 group relative overflow-hidden`}> 
       <div className={`absolute inset-0 opacity-5 ${rc.bg}`}></div>
       <div className="relative">
         <div className="flex items-start justify-between mb-2.5">
           <div>
-            <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
-            <div className="text-white font-bold text-base leading-tight">{patient.initials}</div>
-            <div className="text-slate-400 text-xs">{patient.age} años · {patient.gender === "F" ? "F" : "M"}</div>
+            <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+            <div className="text-white font-bold text-base leading-tight">{patient.full_name || patient.initials}</div>
+            <div className="text-slate-400 text-xs">{patient.age ?? "—"} años · {patient.gender === "F" ? "F" : patient.gender === "M" ? "M" : "NR"}</div>
+            {(patient.phone || patient.comuna) && <div className="mt-0.5 text-[10px] text-slate-500">☎ {patient.phone || "sin fono"}{patient.comuna ? ` · ${patient.comuna}` : ""}</div>}
+            <div className="mt-1 flex flex-wrap gap-1">
+              <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+              <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+            </div>
           </div>
           <div className="flex flex-col items-end gap-1">
             <RiskBadge risk={patient.risk} />
@@ -2099,6 +3503,21 @@ const PatientCard = ({ patient, onClick }) => {
           </div>
         </div>
         <div className="text-xs text-slate-300 font-medium mb-2 leading-snug">{patient.dx_main}</div>
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {dxTags.map(t => (
+            <span key={t.key} className="rounded-full border px-2 py-0.5 text-[10px] font-black" style={{ borderColor:t.color, color:t.color, backgroundColor:`${t.color}16` }}>{t.label}</span>
+          ))}
+          {(patient.dx_secondary?.length || 0) > 6 && <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">+{patient.dx_secondary.length - 6} dx</span>}
+        </div>
+        {latestNote && (
+          <div className="mb-3 rounded-2xl border border-sky-800/60 bg-sky-950/20 p-2.5 text-[11px] leading-relaxed text-sky-100 shadow-inner shadow-sky-950/30">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[9px] font-black uppercase tracking-wider text-sky-400">
+              <span>✍ Última nota</span>
+              <span className="font-mono text-slate-500">{latestNote.createdAt}</span>
+            </div>
+            <div className="line-clamp-2">{latestNote.body}</div>
+          </div>
+        )}
         <div className="flex items-center gap-2 mb-3">
           {patient.alerts > 0 && (
             <span className="flex items-center gap-1 text-red-400 text-[10px] font-semibold bg-red-900/20 px-1.5 py-0.5 rounded border border-red-800">
@@ -2110,14 +3529,31 @@ const PatientCard = ({ patient, onClick }) => {
               ✓ {patient.tasks} tarea{patient.tasks>1?"s":""}
             </span>
           )}
+          {getPatientAttendanceStats(patient.id).inasistencias > 0 && (
+            <span className="flex items-center gap-1 text-red-300 text-[10px] font-semibold bg-red-900/20 px-1.5 py-0.5 rounded border border-red-800">
+              🚫 {getPatientAttendanceStats(patient.id).inasistencias} inasist.
+            </span>
+          )}
+          {getPatientAttendanceStats(patient.id).postergaciones > 0 && (
+            <span className="flex items-center gap-1 text-amber-300 text-[10px] font-semibold bg-amber-900/20 px-1.5 py-0.5 rounded border border-amber-800">
+              ↪️ {getPatientAttendanceStats(patient.id).postergaciones} post.
+            </span>
+          )}
         </div>
-        <div className="border-t border-slate-700/60 pt-2.5 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            {[patient.doctor, patient.psychologist, patient.ot, patient.nurse, patient.social].filter(Boolean).slice(0,4).map((pid,i) => (
-              <ProfAvatar key={i} id={pid} />
-            ))}
+        <div className="border-t border-slate-700/60 pt-2.5 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-600">Tratantes visibles</div>
+            <div className="flex items-center gap-1.5">
+              {getPatientTeamDisplayIds(patient, 6).map((pid,i) => (
+                <ProfAvatar key={`${pid}-${i}`} id={pid} />
+              ))}
+              {getPatientTeamIds(patient).length > 6 && (
+                <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 text-[10px] font-black text-slate-400">+{getPatientTeamIds(patient).length - 6}</span>
+              )}
+              {getPatientTeamIds(patient).length === 0 && <span className="text-[10px] text-slate-600">Sin tratantes</span>}
+            </div>
           </div>
-          <div className="text-[10px] text-slate-500">
+          <div className="shrink-0 text-right text-[10px] text-slate-500">
             {patient.next_control ? <>⏱ {patient.next_control}</> : <span className="text-orange-400">Sin próximo control</span>}
           </div>
         </div>
@@ -2126,47 +3562,895 @@ const PatientCard = ({ patient, onClick }) => {
   );
 };
 
+
+// ─── V2.1 · ARCHIVOS CLÍNICOS PRIVADOS ───────────────────────────────────
+const downloadClinicalFile = async (file) => {
+  try {
+    if (!isSupabaseConfigured || !file?.storagePath) {
+      alert("Este archivo no tiene ruta de Storage disponible.");
+      return;
+    }
+    const { data, error } = await supabase.storage
+      .from(CLINICAL_FILES_BUCKET)
+      .createSignedUrl(file.storagePath, 60);
+    if (error) throw error;
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    alert(`No se pudo descargar/abrir el archivo: ${err.message || err}`);
+  }
+};
+
+const PatientFilesPanel = ({ patient, files = [], authSession, onDataChanged }) => {
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [category, setCategory] = useState("hemograma");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const fileInputRef = useRef(null);
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+
+  const canUpload = isSupabaseConfigured && authSession?.user?.id && patient?._dbId && getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.institutionDbId;
+
+  const handleUpload = async () => {
+    try {
+      setMessage("");
+      if (!selectedFile) throw new Error("Selecciona un archivo antes de subir.");
+      if (!canUpload) throw new Error("Falta sesión, paciente real de Supabase o institución activa.");
+      if (selectedFile.size > MAX_CLINICAL_FILE_SIZE) throw new Error(`Archivo demasiado grande. Máximo ${formatBytes(MAX_CLINICAL_FILE_SIZE)}.`);
+
+      setBusy(true);
+      const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+      const safeName = sanitizeStorageFileName(selectedFile.name);
+      const storagePath = `${membership.institutionDbId}/${patient._dbId}/${Date.now()}-${safeName}`;
+      const contentType = selectedFile.type || "application/octet-stream";
+
+      const uploadRes = await supabase.storage
+        .from(CLINICAL_FILES_BUCKET)
+        .upload(storagePath, selectedFile, { upsert: false, contentType });
+      if (uploadRes.error) throw uploadRes.error;
+
+      const insertRes = await supabase.from("files").insert({
+        institution_id: membership.institutionDbId,
+        patient_id: patient._dbId,
+        file_name: selectedFile.name,
+        original_file_name: selectedFile.name,
+        file_type: contentType,
+        file_category: category,
+        description: description?.trim() || null,
+        file_size_bytes: selectedFile.size,
+        storage_path: storagePath,
+        uploaded_by: authSession.user.id,
+      });
+      if (insertRes.error) throw insertRes.error;
+
+      await supabase.from("trace_events").insert({
+        institution_id: membership.institutionDbId,
+        patient_id: patient._dbId,
+        actor_profile_id: authSession.user.id,
+        actor_professional_id: membership.professionalId || null,
+        action: "Archivo clínico subido",
+        field: "files.storage_path",
+        previous_value: null,
+        next_value: selectedFile.name,
+        event_type: "archivo",
+      });
+
+      setSelectedFile(null);
+      setDescription("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setMessage("Archivo subido correctamente.");
+      if (onDataChanged) await onDataChanged();
+    } catch (err) {
+      setMessage(`Error: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (file) => {
+    if (!file?.storagePath || !file?._dbId) return;
+    if (!confirm(`¿Eliminar el archivo "${file.name}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      setBusy(true);
+      const storageRes = await supabase.storage.from(CLINICAL_FILES_BUCKET).remove([file.storagePath]);
+      if (storageRes.error) throw storageRes.error;
+      const dbRes = await supabase.from("files").delete().eq("id", file._dbId);
+      if (dbRes.error) throw dbRes.error;
+      setMessage("Archivo eliminado.");
+      if (onDataChanged) await onDataChanged();
+    } catch (err) {
+      setMessage(`No se pudo eliminar: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fileIcon = (file) => {
+    const t = `${file?.type || ""} ${file?.name || ""}`.toLowerCase();
+    if (t.includes("pdf")) return "PDF";
+    if (t.includes("image") || /\.(jpg|jpeg|png|webp)$/i.test(file?.name || "")) return "IMG";
+    if (t.includes("word") || t.includes("doc")) return "DOC";
+    return "ARC";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-700 bg-slate-900/30 p-4">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-slate-100">Subir archivo clínico</div>
+            <div className="text-[11px] text-slate-500">Storage privado por institución y paciente · PDF/JPG/PNG/DOCX · Máx. {formatBytes(MAX_CLINICAL_FILE_SIZE)}</div>
+          </div>
+          <span className="rounded-full border border-sky-700 bg-sky-900/20 px-2 py-0.5 text-[10px] font-bold text-sky-300">v2.1</span>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+              onChange={e => setSelectedFile(e.target.files?.[0] || null)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-sky-600 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-white"
+            />
+            {selectedFile && <div className="mt-1 text-[10px] text-slate-500">Seleccionado: {selectedFile.name} · {formatBytes(selectedFile.size)}</div>}
+          </div>
+          <select value={category} onChange={e => setCategory(e.target.value)} className="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+            {CLINICAL_FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        </div>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="Descripción breve opcional: hemograma mayo, epicrisis alta, consentimiento, etc."
+          className="mt-3 min-h-[70px] w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 placeholder-slate-600 outline-none focus:border-sky-500"
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <button
+            onClick={handleUpload}
+            disabled={busy || !canUpload || !selectedFile}
+            className="rounded-full border border-sky-600 bg-sky-600/25 px-4 py-2 text-xs font-black text-sky-200 hover:bg-sky-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Subiendo…" : "+ Subir archivo"}
+          </button>
+          {message && <div className={`text-[11px] ${message.startsWith("Error") || message.startsWith("No se") ? "text-red-400" : "text-emerald-400"}`}>{message}</div>}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {files.length === 0 && <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 text-sm text-slate-500">Sin archivos adjuntos.</div>}
+        {files.map(f => (
+          <div key={f.id} className="flex items-center gap-3 rounded-xl border border-slate-700 bg-[#131920] p-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-red-700 bg-red-900/30 text-[10px] font-black text-red-300">{fileIcon(f)}</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="truncate text-sm font-semibold text-slate-100">{f.name}</div>
+                <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] font-bold text-slate-400">{getFileCategoryLabel(f.category)}</span>
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500">{f.size} · {f.date} · {getProf(f.author)?.name || f.author || "sin autor"}</div>
+              {f.description && <div className="mt-1 text-[11px] text-slate-400">{f.description}</div>}
+            </div>
+            <button onClick={() => downloadClinicalFile(f)} className="rounded-full border border-sky-700 px-3 py-1.5 text-[10px] font-bold text-sky-300 hover:bg-sky-900/30">Abrir</button>
+            {isAdmin && <button onClick={() => handleDelete(f)} disabled={busy} className="rounded-full border border-red-800 px-3 py-1.5 text-[10px] font-bold text-red-300 hover:bg-red-900/20 disabled:opacity-50">Eliminar</button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ClinicalFilesView = ({ authSession, onDataChanged }) => {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const rows = useMemo(() => {
+    const q = normalizeText(query);
+    return FILES.filter(f => {
+      const patient = getPatientByCode(f.patient);
+      const hay = normalizeText(`${f.name} ${f.description} ${f.patient} ${patient?.initials} ${patient?.dx_main} ${getFileCategoryLabel(f.category)} ${getProf(f.author)?.name}`);
+      return (category === "all" || f.category === category) && (!q || hay.includes(q));
+    }).sort((a,b) => String(b.uploadedAt || b.date).localeCompare(String(a.uploadedAt || a.date)));
+  }, [query, category, ACTIVE_INSTITUTION_ID, ACTIVE_USER_ID]);
+
+  const exportRows = rows.map(f => ({
+    paciente: f.patient,
+    archivo: f.name,
+    categoria: getFileCategoryLabel(f.category),
+    fecha: f.date,
+    tamano: f.size,
+    descripcion: f.description,
+    autor: getProf(f.author)?.name || f.author || "",
+  }));
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-black text-slate-100">Archivos clínicos</div>
+            <div className="text-xs text-slate-500">Repositorio privado de documentos asociados a pacientes visibles en la institución activa.</div>
+          </div>
+          <ExportButton rows={exportRows} filename={`archivos_clinicos_${ACTIVE_INSTITUTION_ID}_${ACTIVE_USER_ID}`} label="Exportar índice" />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_220px]">
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar por paciente, archivo, diagnóstico, categoría o autor…" className="rounded-2xl border border-slate-700 bg-slate-950/50 px-4 py-3 text-sm text-slate-100 placeholder-slate-600 outline-none focus:border-sky-500" />
+          <select value={category} onChange={e => setCategory(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-950/50 px-4 py-3 text-sm font-bold text-slate-300 outline-none focus:border-sky-500">
+            <option value="all">Todas las categorías</option>
+            {CLINICAL_FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {rows.length === 0 && <div className="rounded-2xl border border-slate-800 bg-[#131920] p-5 text-sm text-slate-500">No hay archivos que coincidan con la búsqueda.</div>}
+        {rows.map(f => {
+          const patient = getPatientByCode(f.patient);
+          return (
+            <div key={f.id} className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-sky-700 bg-sky-900/20 text-[10px] font-black text-sky-300">{String(getFileCategoryLabel(f.category)).slice(0,3).toUpperCase()}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold text-slate-100">{f.name}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">{f.patient} · {patient?.initials || "—"} · {f.size} · {f.date}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">{getFileCategoryLabel(f.category)}</span>
+                    {patient?.risk && <RiskBadge risk={patient.risk} small />}
+                  </div>
+                  {f.description && <p className="mt-2 text-xs text-slate-400">{f.description}</p>}
+                </div>
+                <button onClick={() => downloadClinicalFile(f)} className="rounded-full border border-sky-700 px-3 py-1.5 text-[10px] font-bold text-sky-300 hover:bg-sky-900/30">Abrir</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <Disclaimer />
+    </div>
+  );
+};
+
+const ClinicalNotesPanel = ({ patient, notes = [], authSession, onDataChanged }) => {
+  const [body, setBody] = useState("");
+  const [noteType, setNoteType] = useState("evolucion");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setSaving(true);
+    try {
+      await savePatientNoteToSupabase({ patient, body, noteType, authSession });
+      setBody("");
+      setNoteType("evolucion");
+      setMessage("Comentario guardado en la tarjeta clínica.");
+      await onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar el comentario.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="rounded-3xl border border-sky-900/70 bg-gradient-to-br from-slate-900/90 to-sky-950/20 p-4 shadow-xl shadow-black/20">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-white">Escribir en tarjeta clínica</div>
+            <div className="text-xs text-slate-500">Comentarios breves, gestión, riesgo, red, fármacos o seguimiento.</div>
+          </div>
+          <select value={noteType} onChange={e => setNoteType(e.target.value)} className="rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs font-bold text-slate-200 outline-none focus:border-sky-500">
+            {CLINICAL_NOTE_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+          </select>
+        </div>
+        <textarea
+          value={body}
+          onChange={e => setBody(e.target.value)}
+          rows={5}
+          placeholder="Ej.: Se contacta a familiar. Paciente acepta control. Pendiente hemograma el viernes…"
+          className="w-full resize-y rounded-2xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-sm leading-relaxed text-slate-100 placeholder-slate-600 outline-none focus:border-sky-500"
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <div className={`text-xs ${message.includes("guardado") ? "text-emerald-400" : "text-amber-400"}`}>{message}</div>
+          <button disabled={saving || !body.trim()} className="rounded-2xl bg-sky-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40">
+            {saving ? "Guardando…" : "Guardar comentario"}
+          </button>
+        </div>
+      </form>
+
+      <div className="space-y-3">
+        {notes.length === 0 && <div className="rounded-2xl border border-slate-800 bg-[#131920] p-4 text-sm text-slate-500">Sin comentarios clínicos todavía.</div>}
+        {notes.map(note => {
+          const type = getClinicalNoteType(note.type);
+          return (
+            <div key={note.id} className="rounded-3xl border border-slate-800 bg-[#131920] p-4 shadow-lg shadow-black/20">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-sky-800 bg-sky-950/30 px-2 py-1 text-[10px] font-black text-sky-300">{type.icon} {type.label}</span>
+                  <span className="text-xs font-bold text-slate-200">{note.authorName || getProf(note.author)?.name || "Usuario"}</span>
+                </div>
+                <span className="font-mono text-[10px] text-slate-500">{note.createdAt}</span>
+              </div>
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">{note.body}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const PatientAttendancePanel = ({ patient, events = [], authSession, onDataChanged }) => {
+  const emptyForm = () => ({
+    type: "inasistencia",
+    eventDate: new Date().toISOString().slice(0, 10),
+    previousDate: patient?.next_control || "",
+    newDate: "",
+    reason: "",
+    notes: "",
+  });
+  const [form, setForm] = useState(emptyForm);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const membership = getMembershipForWorkspace(patient?.institution || ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+  const stats = getPatientAttendanceStats(patient.id);
+
+  const resetForm = () => {
+    setEditingEvent(null);
+    setForm(emptyForm());
+  };
+
+  const startEdit = (ev) => {
+    setEditingEvent(ev);
+    setForm({
+      type: ev.type || "inasistencia",
+      eventDate: ev.eventDate || new Date().toISOString().slice(0, 10),
+      previousDate: ev.previousDate || "",
+      newDate: ev.newDate || "",
+      reason: ev.reason || "",
+      notes: ev.notes || "",
+    });
+    setMessage("Editando registro. Si fue un error, puedes cambiar Inasistencia por Asistencia registrada o Postergación.");
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    try {
+      if (editingEvent) {
+        await updatePatientAttendanceEventInSupabase({ patient, attendanceEvent: editingEvent, form, authSession });
+        setMessage("Registro corregido. Si ya no quedan inasistencias, el estado se ajusta automáticamente a activo.");
+      } else {
+        await savePatientAttendanceEventToSupabase({ patient, form, authSession });
+        setMessage("Registro guardado. Si fue inasistencia, el estado del paciente queda marcado como inasistente.");
+      }
+      resetForm();
+      await onDataChanged?.();
+    } catch (error) {
+      console.error(error);
+      setMessage(error?.message || "No se pudo guardar el registro.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteEvent = async (ev) => {
+    if (!window.confirm("¿Eliminar este registro de asistencia/inasistencia? Úsalo solo si fue un error de registro. La corrección quedará en trazabilidad.")) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await deletePatientAttendanceEventInSupabase({ patient, attendanceEvent: ev, authSession });
+      setMessage("Registro eliminado por corrección. Si no quedan inasistencias, el estado se ajusta automáticamente a activo.");
+      if (editingEvent?._dbId === ev._dbId) resetForm();
+      await onDataChanged?.();
+    } catch (error) {
+      console.error(error);
+      setMessage(error?.message || "No se pudo eliminar el registro.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-400">v2.9.1 · Asistencia corregible</div>
+            <h3 className="text-base font-black text-white">Inasistencias, postergaciones y correcciones</h3>
+            <p className="text-xs text-slate-500">Registra inasistencias separadas de postergaciones/cambios de hora. Si fue un error, puedes editar o eliminar el registro.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-2xl border border-red-900/60 bg-red-950/20 px-3 py-2"><div className="text-[10px] text-red-300">Inasist.</div><div className="text-lg font-black text-red-200">{stats.inasistencias}</div></div>
+            <div className="rounded-2xl border border-amber-900/60 bg-amber-950/20 px-3 py-2"><div className="text-[10px] text-amber-300">Posterg.</div><div className="text-lg font-black text-amber-200">{stats.postergaciones}</div></div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/40 px-3 py-2"><div className="text-[10px] text-slate-400">Total</div><div className="text-lg font-black text-slate-100">{stats.total}</div></div>
+          </div>
+        </div>
+
+        {editingEvent && (
+          <div className="mb-3 rounded-2xl border border-sky-800 bg-sky-950/25 p-3 text-xs text-sky-200">
+            Corrigiendo registro del <b>{editingEvent.eventDate || editingEvent.createdAt}</b>. Puedes cambiar el tipo, la fecha o el detalle. Esto no borra la trazabilidad.
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            <div>
+              <FieldLabel>Tipo</FieldLabel>
+              <SelectInput value={form.type} onChange={v => update("type", v)}>
+                {ATTENDANCE_EVENT_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+              </SelectInput>
+            </div>
+            <div><FieldLabel>Fecha del evento</FieldLabel><TextInput type="date" value={form.eventDate} onChange={v => update("eventDate", v)} /></div>
+            <div><FieldLabel>Hora/fecha original</FieldLabel><TextInput type="date" value={form.previousDate} onChange={v => update("previousDate", v)} /></div>
+            <div><FieldLabel>Nueva fecha</FieldLabel><TextInput type="date" value={form.newDate} onChange={v => update("newDate", v)} /></div>
+            <div><FieldLabel>Motivo breve</FieldLabel><TextInput value={form.reason} onChange={v => update("reason", v)} placeholder="Ej: no asiste / pidió cambio" /></div>
+          </div>
+          <div className="mt-3"><FieldLabel>Detalle / gestión realizada</FieldLabel><TextAreaInput rows={3} value={form.notes} onChange={v => update("notes", v)} placeholder="Ej.: Se llama a paciente; no contesta. Madre avisa que no podrá asistir. Se reagenda para..." /></div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className={`text-xs ${message.includes("guardado") || message.includes("corregido") || message.includes("eliminado") ? "text-emerald-400" : "text-amber-400"}`}>{message}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {editingEvent && <button type="button" onClick={resetForm} disabled={saving} className="rounded-2xl border border-slate-700 px-4 py-2 text-xs font-black text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancelar corrección</button>}
+              <button disabled={saving} className="rounded-2xl bg-amber-600 px-4 py-2 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">{saving ? "Guardando…" : editingEvent ? "Guardar corrección" : "Guardar registro"}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div className="space-y-2">
+        {events.length === 0 && <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin registros de asistencia, inasistencia o postergación.</div>}
+        {events.map(ev => {
+          const type = getAttendanceEventType(ev.type);
+          const canEdit = isAdmin || ev.profileAuthor === authSession?.user?.id;
+          return (
+            <div key={ev.id} className={`rounded-2xl border p-3 ${type.tone}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-black text-sm">{type.icon} {type.label}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="font-mono text-[11px] text-slate-400">{ev.eventDate || ev.createdAt}</div>
+                  {canEdit && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      <button type="button" onClick={() => startEdit(ev)} disabled={saving} className="rounded-full border border-sky-700 bg-sky-950/30 px-2 py-1 text-[10px] font-black text-sky-300 hover:bg-sky-900/30 disabled:opacity-50">Editar</button>
+                      <button type="button" onClick={() => deleteEvent(ev)} disabled={saving} className="rounded-full border border-red-800 bg-red-950/30 px-2 py-1 text-[10px] font-black text-red-300 hover:bg-red-900/30 disabled:opacity-50">Eliminar</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                {ev.previousDate && <span>Original: <b className="text-slate-200">{ev.previousDate}</b></span>}
+                {ev.newDate && <span>Nueva: <b className="text-slate-200">{ev.newDate}</b></span>}
+                {ev.reason && <span>Motivo: <b className="text-slate-200">{ev.reason}</b></span>}
+                <span>Autor: <b className="text-slate-200">{ev.authorName || getProf(ev.author)?.name || "Usuario"}</b></span>
+              </div>
+              {ev.notes && <div className="mt-2 whitespace-pre-wrap rounded-xl border border-slate-800/80 bg-slate-950/25 p-2 text-xs leading-relaxed text-slate-200">{ev.notes}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSaved }) => {
+  const isDelete = action === "delete";
+  const [reason, setReason] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const canConfirm = reason.trim().length >= 8 && (!isDelete || confirmText.trim().toUpperCase() === "ELIMINAR");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!canConfirm) return;
+    setSaving(true);
+    setError("");
+    try {
+      await patientSafetyActionInSupabase({ action, patient, reason, authSession });
+      await onSaved?.();
+      onClose?.(true);
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo completar la acción.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
+      <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
+        <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.7 · Ficha clínica completa</div>
+          <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
+            {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Paciente: <span className="font-black text-white">{patient?.id}</span> · {patient?.initials}
+          </p>
+        </div>
+
+        <div className="space-y-4 p-5">
+          {isDelete ? (
+            <div className="rounded-2xl border border-red-800 bg-red-950/20 p-3 text-sm text-red-200">
+              Esta acción elimina el paciente y sus registros asociados. Úsala solo para pacientes de prueba o creados por error. La trazabilidad registra el intento antes de borrar.
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-100">
+              Esta acción conserva el registro, cambia el estado a alta y agrega una nota de archivo/egreso. Es la opción recomendada para pacientes reales.
+            </div>
+          )}
+
+          <div>
+            <FieldLabel>Motivo obligatorio</FieldLabel>
+            <TextAreaInput
+              value={reason}
+              onChange={setReason}
+              rows={4}
+              placeholder={isDelete ? "Ejemplo: Paciente de prueba creado durante configuración inicial." : "Ejemplo: Alta administrativa / egreso / caso duplicado archivado."}
+            />
+          </div>
+
+          {isDelete && (
+            <div>
+              <FieldLabel>Confirmación</FieldLabel>
+              <TextInput
+                value={confirmText}
+                onChange={setConfirmText}
+                placeholder="Escribe ELIMINAR para confirmar"
+              />
+            </div>
+          )}
+
+          {error && <div className="rounded-xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-slate-800 p-5">
+          <button type="button" onClick={() => onClose?.(false)} className="rounded-full border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Cancelar</button>
+          <button
+            type="submit"
+            disabled={!canConfirm || saving}
+            className={`rounded-full px-4 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50 ${isDelete ? "bg-red-600 hover:bg-red-500" : "bg-amber-600 hover:bg-amber-500"}`}
+          >
+            {saving ? "Procesando…" : isDelete ? "Eliminar definitivamente" : "Archivar / egresar"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const currentProfessionalId = membership?.professionalId || null;
+  const [professionalId, setProfessionalId] = useState("");
+  const [teamRole, setTeamRole] = useState("psiquiatra");
+  const [selfTeamRole, setSelfTeamRole] = useState(roleToDefaultTeamRole(membership?.role));
+  const [isPrimary, setIsPrimary] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const teamMembers = (patient.teamMembers || []).slice().sort((a, b) => {
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
+    return getTeamRoleLabel(a.team_role).localeCompare(getTeamRoleLabel(b.team_role));
+  });
+  const assignedKeys = new Set(teamMembers.map(m => `${m.professional_id}:${m.team_role}`));
+  const professionalOptions = getAssignableProfessionals();
+  const selfMemberships = teamMembers.filter(m => m.professional_id === currentProfessionalId);
+  const isTreating = selfMemberships.length > 0 || isAdmin;
+  const canSelfManage = USING_SUPABASE_DATA && Boolean(currentProfessionalId) && !isAdmin;
+
+  const takeSelfTreatment = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await takePatientTreatmentInSupabase({ patient, teamRole: selfTeamRole, isPrimary: false, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo tomar tratancia del paciente.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const leaveSelfTreatment = async (member = null) => {
+    if (!window.confirm("¿Dejar tu tratancia de este paciente? Podrás seguir viéndolo si perteneces a la institución, pero no editarlo.")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await leavePatientTreatmentInSupabase({ patient, teamRole: member?.team_role || null, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo dejar la tratancia.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await savePatientTeamMemberToSupabase({ patient, professionalId, teamRole, isPrimary, authSession });
+      setProfessionalId("");
+      setIsPrimary(false);
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo actualizar el equipo tratante.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeMember = async (member) => {
+    if (!window.confirm("¿Quitar este integrante del equipo tratante?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await removePatientTeamMemberFromSupabase({ patient, professionalId: member.professional_id, teamRole: member.team_role, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo quitar el integrante.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setPrimary = async (member) => {
+    setSaving(true);
+    setError("");
+    try {
+      await setPrimaryPatientTeamMemberInSupabase({ patient, professionalId: member.professional_id, teamRole: member.team_role, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo marcar como principal.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.7 · Ficha clínica completa</div>
+            <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
+            <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
+          </div>
+          {!isAdmin && <span className={`rounded-full border px-3 py-1 text-[10px] font-black ${isTreating ? "border-emerald-700 bg-emerald-950/30 text-emerald-300" : "border-amber-700 bg-amber-950/30 text-amber-300"}`}>{isTreating ? "Eres tratante" : "Solo lectura"}</span>}
+        </div>
+
+        {canSelfManage && (
+          <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-black text-slate-100">Mi tratancia</div>
+                <div className="text-[11px] text-slate-500">Puedes tomar o dejar la tratancia sin esperar asignación de jefatura. Todo queda en trazabilidad.</div>
+              </div>
+              {isTreating ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {selfMemberships.map(m => (
+                    <button key={`${m.professional_id}:${m.team_role}`} disabled={saving} onClick={() => leaveSelfTreatment(m)} className="rounded-full border border-red-800 bg-red-950/20 px-3 py-1.5 text-xs font-black text-red-300 hover:bg-red-900/30 disabled:opacity-50">
+                      Dejar tratancia · {getTeamRoleLabel(m.team_role)}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <select value={selfTeamRole} onChange={e => setSelfTeamRole(e.target.value)} className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-200 outline-none focus:border-sky-500">
+                    {TEAM_ROLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                  </select>
+                  <button disabled={saving} onClick={takeSelfTreatment} className="rounded-full border border-emerald-600 bg-emerald-600/20 px-3 py-1.5 text-xs font-black text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50">
+                    Tomar tratancia
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {error && <div className="mt-3 rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+
+        <div className="mt-4 space-y-2">
+          {teamMembers.length === 0 && <div className="rounded-2xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">Sin equipo tratante asignado.</div>}
+          {teamMembers.map(member => {
+            const prof = getProf(member.professional_id);
+            return (
+              <div key={`${member.professional_id}:${member.team_role}`} className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900/40 p-3">
+                <ProfAvatar id={member.professional_id} size="lg" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-sm font-black text-slate-100">{prof?.name || "Profesional no encontrado"}</div>
+                    {member.is_primary && <span className="rounded-full border border-sky-500 bg-sky-500/10 px-2 py-0.5 text-[10px] font-black text-sky-300">Principal</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-500">{getTeamRoleLabel(member.team_role)} · {prof?.specialty || ROLE_LABELS[prof?.role] || "Equipo clínico"}</div>
+                </div>
+                {isAdmin && (
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    {!member.is_primary && (
+                      <button disabled={saving} onClick={() => setPrimary(member)} className="rounded-full border border-sky-700 px-2.5 py-1 text-[10px] font-black text-sky-300 hover:bg-sky-900/30 disabled:opacity-50">Marcar principal</button>
+                    )}
+                    <button disabled={saving} onClick={() => removeMember(member)} className="rounded-full border border-red-800 px-2.5 py-1 text-[10px] font-black text-red-300 hover:bg-red-950/30 disabled:opacity-50">Quitar</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {isAdmin && (
+        <form onSubmit={submit} className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+          <div className="mb-3 text-sm font-black text-slate-100">Agregar o reasignar integrante como admin</div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <FieldLabel>Profesional</FieldLabel>
+              <SelectInput value={professionalId} onChange={setProfessionalId}>
+                <option value="">Seleccionar</option>
+                {professionalOptions.map(prof => (
+                  <option key={prof.id} value={prof.id} disabled={assignedKeys.has(`${prof.id}:${teamRole}`)}>
+                    {prof.name} · {ROLE_LABELS[prof.role] || prof.role}
+                  </option>
+                ))}
+              </SelectInput>
+            </div>
+            <div>
+              <FieldLabel>Rol en este caso</FieldLabel>
+              <SelectInput value={teamRole} onChange={setTeamRole}>
+                {TEAM_ROLE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </SelectInput>
+            </div>
+            <div className="flex items-end gap-2">
+              <label className="flex min-h-[38px] flex-1 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/50 px-3 text-xs font-bold text-slate-300">
+                <input type="checkbox" checked={isPrimary} onChange={e => setIsPrimary(e.target.checked)} />
+                Principal para ese rol
+              </label>
+              <button disabled={saving || !professionalId || !teamRole} className="min-h-[38px] rounded-xl bg-sky-600 px-4 text-xs font-black text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
+                {saving ? "Guardando…" : "Agregar"}
+              </button>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] text-slate-500">Puedes agregar más de un profesional por rol. El marcado como principal se usa para vista rápida y responsabilidad preferente.</p>
+        </form>
+      )}
+    </div>
+  );
+};
+
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
-const PatientDetail = ({ patient, onClose, onEdit }) => {
+const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
+  const [medModal, setMedModal] = useState(null);
+  const [alertModal, setAlertModal] = useState(false);
+  const [resolvingAlertId, setResolvingAlertId] = useState(null);
   const rc = getRiskCfg(patient.risk);
-  const patAlerts = ALERTS.filter(a => a.patient === patient.id);
+  const patAlerts = ALERTS.filter(a => a.patient === patient.id && a.status !== "resuelto" && a.status !== "cancelado");
   const patMeds   = patient.meds.map(mid => MEDICATIONS.find(m => m.id === mid)).filter(Boolean);
   const patTrace  = TRACE_EVENTS.filter(t => t.patient === patient.id);
   const patMsgs   = MESSAGES.filter(m => m.patient === patient.id);
   const patFiles  = FILES.filter(f => f.patient === patient.id);
+  const patNotes  = getPatientNotes(patient.id);
+  const patAttendance = getPatientAttendanceEvents(patient.id);
+  const attendanceStats = getPatientAttendanceStats(patient.id);
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const currentProfessionalId = membership?.professionalId || null;
+  const canEditPatient = canEditPatientInCurrentWorkspace(patient);
+  const isTreating = isAdmin || (currentProfessionalId && getPatientTeamIds(patient).includes(currentProfessionalId));
+  const canSelfTakeTreatment = USING_SUPABASE_DATA && Boolean(currentProfessionalId) && !isAdmin && !isTreating;
+  const [quickTreating, setQuickTreating] = useState(false);
+  const [quickTreatError, setQuickTreatError] = useState("");
+  const handleQuickTakeTreatment = async () => {
+    setQuickTreating(true);
+    setQuickTreatError("");
+    try {
+      await takePatientTreatmentInSupabase({ patient, teamRole: roleToDefaultTeamRole(membership?.role), isPrimary: false, authSession });
+      await onDataChanged?.();
+      setTab("equipo");
+    } catch (err) {
+      console.error(err);
+      setQuickTreatError(err?.message || "No se pudo tomar tratancia del paciente.");
+    } finally {
+      setQuickTreating(false);
+    }
+  };
+
+  const refreshInsideFicha = async (nextTab = tab) => {
+    await onDataChanged?.();
+    if (nextTab) setTab(nextTab);
+  };
+  const handleResolveAlert = async (alert) => {
+    if (!confirm(`¿Marcar como resuelta la alerta "${alert.title}"? Desaparecerá de las alertas activas.`)) return;
+    setResolvingAlertId(alert.id);
+    try {
+      await resolvePatientAlert({ patient, alert, authSession });
+      await refreshInsideFicha("alertas");
+    } catch (err) {
+      console.error(err);
+      window.alert(err?.message || "No se pudo resolver la alerta.");
+    } finally {
+      setResolvingAlertId(null);
+    }
+  };
 
   const TABS = [
     { id:"resumen",     label:"Resumen" },
     { id:"dx",          label:"Diagnósticos" },
     { id:"farmacos",    label:"Fármacos" },
     { id:"alertas",     label:"Alertas" },
+    { id:"asistencia",  label:"Asistencia" },
     { id:"equipo",      label:"Equipo" },
     { id:"archivos",    label:"Archivos" },
+    { id:"notas",       label:"Notas" },
     { id:"historial",   label:"Historial" },
     { id:"mensajes",    label:"Mensajes" },
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-end" onClick={onClose}>
-      <div className="w-full max-w-2xl h-screen bg-[#0d1117] overflow-y-auto flex flex-col border-l border-slate-700 shadow-2xl"
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-3 backdrop-blur-md" onClick={onClose}>
+      <div className="h-[calc(100vh-1.5rem)] w-[min(1680px,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70 flex flex-col"
         onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className={`border-b ${rc.border} border-opacity-50 p-5 bg-[#131920]`}>
+        <div className={`shrink-0 border-b ${rc.border} border-opacity-50 p-4 bg-[#131920]`}>
           <div className="flex items-start justify-between mb-3">
             <div>
-              <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
-              <div className="text-white text-xl font-bold">{patient.initials}</div>
-              <div className="text-slate-400 text-sm">{patient.age} años · {patient.gender === "F" ? "Femenino" : "Masculino"}</div>
+              <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+              <div className="text-white text-xl font-bold">{patient.full_name || patient.initials}</div>
+              <div className="text-slate-400 text-sm">{patient.age ?? "—"} años · {patient.gender === "F" ? "Femenino" : patient.gender === "M" ? "Masculino" : "No registrado"}</div>
+              {(patient.email || patient.phone || patient.comuna) && <div className="mt-1 text-xs text-slate-500">{patient.email || "sin email"} · {patient.phone || "sin fono"}{patient.comuna ? ` · ${patient.comuna}` : ""}</div>}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
+                <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="flex items-center gap-2">
-                {onEdit && (
+                {onEdit && canEditPatient && (
                   <button
                     onClick={() => onEdit(patient)}
                     className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-800/50"
                   >
                     Editar
+                  </button>
+                )}
+                {onEdit && !canEditPatient && (
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <span className="rounded-full border border-slate-700 bg-slate-900/50 px-3 py-1 text-[10px] font-black text-slate-400">Solo lectura</span>
+                    {canSelfTakeTreatment && (
+                      <button
+                        type="button"
+                        disabled={quickTreating}
+                        onClick={handleQuickTakeTreatment}
+                        className="rounded-full border border-emerald-600 bg-emerald-600/20 px-3 py-1 text-xs font-black text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50"
+                      >
+                        {quickTreating ? "Tomando…" : "Tomar tratancia"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {USING_SUPABASE_DATA && onSafetyAction && canEditPatient && (
+                  <button
+                    onClick={() => onSafetyAction("archive", patient)}
+                    className="rounded-full border border-amber-700 bg-amber-900/30 px-3 py-1 text-xs font-black text-amber-300 hover:bg-amber-800/50"
+                  >
+                    Archivar
+                  </button>
+                )}
+                {USING_SUPABASE_DATA && onSafetyAction && isAdmin && (
+                  <button
+                    onClick={() => onSafetyAction("delete", patient)}
+                    className="rounded-full border border-red-700 bg-red-900/30 px-3 py-1 text-xs font-black text-red-300 hover:bg-red-800/50"
+                  >
+                    Eliminar
                   </button>
                 )}
                 <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>
@@ -2177,58 +4461,89 @@ const PatientDetail = ({ patient, onClose, onEdit }) => {
           </div>
           <div className="text-sm text-slate-200 font-medium mb-2">{patient.dx_main}</div>
           <Disclaimer />
+          {quickTreatError && <div className="mt-2 rounded-xl border border-red-800 bg-red-950/30 p-2 text-xs text-red-200">{quickTreatError}</div>}
         </div>
         {/* Tabs */}
-        <div className="border-b border-slate-800 flex overflow-x-auto bg-[#0d1117] px-4 gap-1">
+        <div className="shrink-0 border-b border-slate-800 flex overflow-x-auto bg-[#0d1117]/95 px-4 gap-1 backdrop-blur">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors
+              className={`px-3 py-3 text-xs font-black whitespace-nowrap border-b-2 transition-colors
                 ${tab === t.id ? "border-sky-400 text-sky-400" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
               {t.label}
             </button>
           ))}
         </div>
         {/* Tab content */}
-        <div className="flex-1 p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
           {tab === "resumen" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  ["Riesgo suicida", patient.suicide_risk, "riesgo"],
-                  ["Riesgo heteroagresivo", patient.hetero_risk, "riesgo"],
-                  ["Riesgo social", patient.social_risk, "riesgo"],
-                  ["Consumo sustancias", patient.substances, "info"],
-                  ["Adherencia estimada", patient.adherence, "info"],
-                  ["Estado funcional", patient.functional, "info"],
-                  ["Red de apoyo", patient.support, "info"],
-                  ["Ingreso al programa", patient.admission, "date"],
-                ].map(([label, value, type]) => (
-                  <div key={label} className="bg-[#131920] rounded-lg p-3 border border-slate-800">
-                    <div className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider mb-1">{label}</div>
-                    <div className={`text-sm font-medium ${type === "riesgo" && value === "alto" ? "text-orange-400" : type === "riesgo" && value === "critico" ? "text-red-400" : type === "riesgo" && value === "medio" ? "text-yellow-400" : "text-slate-200"}`}>
-                      {value || "—"}
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.35fr_.65fr]">
+                <div className="space-y-3">
+                  {patNotes[0] && (
+                    <div className="rounded-3xl border border-sky-800/60 bg-sky-950/20 p-4 shadow-inner shadow-sky-950/30">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="text-[10px] text-sky-400 uppercase font-black tracking-wider">Último comentario clínico</div>
+                        <div className="font-mono text-[10px] text-slate-500">{patNotes[0].createdAt}</div>
+                      </div>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{patNotes[0].body}</p>
+                    </div>
+                  )}
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 uppercase font-black tracking-wider mb-2">Observaciones de gestión</div>
+                    <p className="text-sm text-slate-300 leading-relaxed">{patient.notes || "Sin observaciones."}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 xl:grid-cols-1">
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Último contacto</div>
+                    <div className="text-sky-400 text-xs font-mono">{patient.last_contact || "—"}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Próximo control</div>
+                    <div className={`text-xs font-mono ${patient.next_control ? "text-emerald-400" : "text-red-400"}`}>
+                      {patient.next_control || "Sin agendar"}
                     </div>
                   </div>
-                ))}
-              </div>
-              <div className="bg-[#131920] rounded-lg p-3 border border-slate-800">
-                <div className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider mb-2">Observaciones de gestión</div>
-                <p className="text-sm text-slate-300 leading-relaxed">{patient.notes}</p>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Último contacto</div>
-                  <div className="text-sky-400 text-xs font-mono">{patient.last_contact}</div>
-                </div>
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Próximo control</div>
-                  <div className={`text-xs font-mono ${patient.next_control ? "text-emerald-400" : "text-red-400"}`}>
-                    {patient.next_control || "Sin agendar"}
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Alertas activas</div>
+                    <div className={`text-xs font-bold ${patient.alerts > 0 ? "text-red-400" : "text-emerald-400"}`}>{patient.alerts}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Inasistencias</div>
+                    <div className={`text-xs font-bold ${attendanceStats.inasistencias > 0 ? "text-red-400" : "text-slate-300"}`}>{attendanceStats.inasistencias}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Postergaciones</div>
+                    <div className={`text-xs font-bold ${attendanceStats.postergaciones > 0 ? "text-amber-400" : "text-slate-300"}`}>{attendanceStats.postergaciones}</div>
                   </div>
                 </div>
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Alertas activas</div>
-                  <div className={`text-xs font-bold ${patient.alerts > 0 ? "text-red-400" : "text-emerald-400"}`}>{patient.alerts}</div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-800 bg-[#131920]/70 p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Datos rápidos del paciente</div>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+                  {[
+                    ["R. suicida", patient.suicide_risk, "riesgo"],
+                    ["R. hetero", patient.hetero_risk, "riesgo"],
+                    ["R. social", patient.social_risk, "riesgo"],
+                    ["Email", patient.email || "Sin email", "info"],
+                    ["Fono", patient.phone || "Sin fono", "info"],
+                    ["Dirección", patient.address || "Sin dirección", "info"],
+                    ["Comuna", patient.comuna || "Sin comuna", "info"],
+                    ["Adherencia", patient.adherence || "—", "info"],
+                    ["Funcional", patient.functional || "—", "info"],
+                    ["Red apoyo", patient.support || "—", "info"],
+                    ["Sector", patient.sector || "Sin sector", "info"],
+                    ["Consultorio", patient.consultorio || "Sin consultorio", "info"],
+                    ["Ingreso", patient.admission || "—", "date"],
+                  ].map(([label, value, type]) => (
+                    <div key={label} className="rounded-2xl border border-slate-800 bg-slate-950/25 px-3 py-2 min-h-[58px]">
+                      <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-500">{label}</div>
+                      <div className={`truncate text-xs font-black ${type === "riesgo" && value === "alto" ? "text-orange-400" : type === "riesgo" && value === "critico" ? "text-red-400" : type === "riesgo" && value === "medio" ? "text-yellow-400" : "text-slate-200"}`} title={String(value || "—")}>
+                        {value || "—"}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </>
@@ -2258,47 +4573,91 @@ const PatientDetail = ({ patient, onClose, onEdit }) => {
           )}
           {tab === "farmacos" && (
             <div className="space-y-3">
-              {patMeds.length === 0 && <div className="text-slate-500 text-sm">Sin tratamientos registrados.</div>}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-400">v2.7 · Tratamientos editables</div>
+                  <h3 className="text-base font-black text-white">Farmacoterapia del paciente</h3>
+                  <p className="text-xs text-slate-500">Registra fármaco, dosis, esquema, fechas de control, responsable y seguimiento.</p>
+                </div>
+                {canEditPatient && (
+                  <button onClick={() => setMedModal({ mode:"create", medication:null })} className="rounded-2xl bg-sky-600 px-4 py-2 text-xs font-black text-white hover:bg-sky-500">
+                    + Agregar fármaco
+                  </button>
+                )}
+              </div>
+              {patMeds.length === 0 && <div className="rounded-3xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin tratamientos registrados. {canEditPatient ? "Usa + Agregar fármaco para comenzar." : "Toma tratancia para poder editar tratamientos."}</div>}
               {patMeds.map(med => (
-                <div key={med.id} className="bg-[#131920] rounded-lg p-4 border border-slate-700 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-white font-semibold">{med.drug} <span className="text-sky-400">{med.dose}</span></div>
-                    <span className="text-xs font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">{med.scheme}</span>
+                <div key={med.id} className={`rounded-2xl border px-3 py-2 ${med.isActive === false ? "border-slate-800 bg-slate-950/35 opacity-75" : "border-slate-700 bg-[#111821]"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="truncate text-sm font-black text-white">{med.drug} <span className="text-fuchsia-400">{med.dose}</span></div>
+                        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-black ${med.isActive === false ? "border-slate-600 text-slate-400" : "border-emerald-700 bg-emerald-950/20 text-emerald-300"}`}>{med.isActive === false ? "Suspendido" : "Activo"}</span>
+                        {med.program !== "general" && <span className="rounded-full border border-violet-700 bg-violet-950/20 px-1.5 py-0.5 text-[9px] font-black text-violet-300">{med.program === "clozapine" ? "Clozapina" : "LAI/depot"}</span>}
+                      </div>
+                      <div className="mt-1 font-mono text-[11px] text-slate-400">{med.scheme || "Sin esquema"} · {med.freq || "Sin frecuencia"}</div>
+                    </div>
+                    {canEditPatient && (
+                      <button onClick={() => setMedModal({ mode:"edit", medication:med })} className="rounded-full border border-sky-700 px-2.5 py-1 text-[11px] font-black text-sky-300 hover:bg-sky-900/30">
+                        Editar
+                      </button>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                    <span>Freq: <span className="text-slate-200">{med.freq}</span></span>
-                    <span>Inicio: <span className="text-slate-200">{med.startDate}</span></span>
-                    <span>Último ajuste: <span className="text-slate-200">{med.lastAdj}</span></span>
-                    <span>Prox. control: <span className="text-yellow-400">{med.nextControl}</span></span>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-slate-400 md:grid-cols-4">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Inicio</span><span className="text-slate-200">{med.startDate || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Ajuste</span><span className="text-slate-200">{med.lastAdj || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Control</span><span className="text-yellow-400">{med.nextControl || "—"}</span></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/25 px-2 py-1"><span className="block text-[8px] uppercase text-slate-500">Resp.</span><span className="inline-flex items-center gap-1 text-slate-200"><ProfAvatar id={med.prescriber} size="sm" /> {getProf(med.prescriber)?.initials || "—"}</span></div>
                   </div>
-                  <div className="flex items-center justify-between border-t border-slate-700 pt-2">
-                    <div className="text-[10px] text-slate-400 italic">{med.followup}</div>
-                    <ProfAvatar id={med.prescriber} size="sm" />
-                  </div>
+                  {med.followup && <div className="mt-2 whitespace-pre-wrap rounded-xl border border-sky-900/60 bg-sky-950/15 px-3 py-2 text-xs leading-relaxed text-slate-200">{med.followup}</div>}
                 </div>
               ))}
             </div>
           )}
+
           {tab === "alertas" && (
-            <div className="space-y-2">
-              {patAlerts.length === 0 && <div className="text-slate-500 text-sm">Sin alertas activas.</div>}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-400">v2.8 · Pendientes personalizados</div>
+                  <h3 className="text-base font-black text-white">Alertas, solicitudes y gestiones del caso</h3>
+                  <p className="text-xs text-slate-500">Registra pedidos de informe, recetas, llamados familiares, trámites o tareas que necesitan resolución oportuna.</p>
+                </div>
+                {getMembershipForWorkspace(ACTIVE_INSTITUTION_ID) && (
+                  <button onClick={() => setAlertModal(true)} className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-xs font-black text-white hover:bg-fuchsia-500">
+                    + Nueva alerta
+                  </button>
+                )}
+              </div>
+              {patAlerts.length === 0 && <div className="rounded-3xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Sin alertas activas. Puedes crear una alerta personalizada si hay una gestión pendiente.</div>}
               {patAlerts.map(a => {
                 const rc2 = getRiskCfg(a.priority);
                 return (
-                  <div key={a.id} className={`bg-[#131920] rounded-lg p-3 border ${rc2.border} border-opacity-60 flex gap-3`}>
+                  <div key={a.id} className={`bg-[#131920] rounded-2xl p-3 border ${rc2.border} border-opacity-60 flex gap-3`}>
                     <div className={`w-1 rounded-full flex-shrink-0 ${rc2.dot}`}></div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-slate-100">{a.title}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                          a.status==="pendiente" ? "border-red-700 text-red-400" :
-                          a.status==="en_curso" ? "border-yellow-700 text-yellow-400" :
-                          "border-emerald-700 text-emerald-400"}`}>{a.status}</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-black text-slate-100">{a.title}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            a.status==="pendiente" ? "border-red-700 text-red-400" :
+                            a.status==="en_curso" ? "border-yellow-700 text-yellow-400" :
+                            "border-emerald-700 text-emerald-400"}`}>{a.status}</span>
+                          <button
+                            type="button"
+                            disabled={resolvingAlertId === a.id}
+                            onClick={() => handleResolveAlert(a)}
+                            className="rounded-full border border-emerald-700 bg-emerald-950/20 px-2.5 py-1 text-[10px] font-black text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-50"
+                          >
+                            {resolvingAlertId === a.id ? "Resolviendo…" : "Resolver"}
+                          </button>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5">{a.comment}</div>
-                      <div className="flex items-center gap-3 mt-1.5">
-                        <span className="text-[10px] text-slate-500">⏱ {a.due}</span>
-                        <ProfAvatar id={a.responsible} size="sm" />
+                      {a.comment && <div className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-300">{a.comment}</div>}
+                      <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
+                        <span>⏱ {a.due || "Sin fecha"}</span>
+                        <span>Tipo: {a.type}</span>
+                        <span className="inline-flex items-center gap-1"><ProfAvatar id={a.responsible} size="sm" /> {getProf(a.responsible)?.initials || "sin resp."}</span>
                       </div>
                     </div>
                   </div>
@@ -2306,48 +4665,37 @@ const PatientDetail = ({ patient, onClose, onEdit }) => {
               })}
             </div>
           )}
+
+          {tab === "asistencia" && (
+            <PatientAttendancePanel
+              patient={patient}
+              events={patAttendance}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
+          )}
           {tab === "equipo" && (
-            <div className="space-y-2">
-              {[
-                ["Médico psiquiatra", patient.doctor],
-                ["Psicólogo/a", patient.psychologist],
-                ["Terapeuta Ocupacional", patient.ot],
-                ["Enfermería", patient.nurse],
-                ["Trabajo Social", patient.social],
-              ].map(([role, pid]) => {
-                const prof = getProf(pid);
-                return (
-                  <div key={role} className="bg-[#131920] rounded-lg p-3 border border-slate-700 flex items-center justify-between">
-                    <span className="text-xs text-slate-400">{role}</span>
-                    {prof ? (
-                      <div className="flex items-center gap-2">
-                        <ProfAvatar id={pid} />
-                        <span className="text-sm text-slate-200 font-medium">{prof.name}</span>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-orange-400 bg-orange-900/20 border border-orange-800 px-2 py-0.5 rounded">Sin asignar</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <AdvancedTeamPanel
+              patient={patient}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
           )}
           {tab === "archivos" && (
-            <div className="space-y-2">
-              {patFiles.length === 0 && <div className="text-slate-500 text-sm">Sin archivos adjuntos.</div>}
-              {patFiles.map(f => (
-                <div key={f.id} className="bg-[#131920] rounded-lg p-3 border border-slate-700 flex items-center gap-3">
-                  <div className="w-8 h-8 bg-red-900/40 border border-red-700 rounded flex items-center justify-center text-red-400 text-xs font-bold">PDF</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-200 font-medium truncate">{f.name}</div>
-                    <div className="text-[10px] text-slate-500">{f.size} · {f.date} · {getProf(f.author)?.name}</div>
-                  </div>
-                </div>
-              ))}
-              <div className="border-2 border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-500 text-xs hover:border-sky-700 cursor-pointer transition-colors">
-                + Adjuntar archivo (máx. 5 MB · PDF, JPG, PNG)
-              </div>
-            </div>
+            <PatientFilesPanel
+              patient={patient}
+              files={patFiles}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
+          )}
+          {tab === "notas" && (
+            <ClinicalNotesPanel
+              patient={patient}
+              notes={patNotes}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
           )}
           {tab === "historial" && (
             <div className="space-y-2">
@@ -2397,6 +4745,23 @@ const PatientDetail = ({ patient, onClose, onEdit }) => {
             </div>
           )}
         </div>
+        {medModal && (
+          <MedicationFormModal
+            patient={patient}
+            medication={medModal.medication}
+            authSession={authSession}
+            onClose={() => setMedModal(null)}
+            onSaved={() => refreshInsideFicha("farmacos")}
+          />
+        )}
+        {alertModal && (
+          <CustomAlertFormModal
+            patient={patient}
+            authSession={authSession}
+            onClose={() => setAlertModal(false)}
+            onSaved={() => refreshInsideFicha("alertas")}
+          />
+        )}
       </div>
     </div>
   );
@@ -2438,6 +4803,8 @@ const Dashboard = ({ setPage }) => {
           </div>
         ))}
       </div>
+
+      <ClinicalActionPanel setPage={setPage} compact maxItems={5} />
 
       <div className="grid grid-cols-2 gap-6">
         {/* Distribución de riesgo */}
@@ -2518,26 +4885,40 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
   const [selected, setSelected] = useState(null);
   const [riskFilter, setRiskFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [quickFilter, setQuickFilter] = useState("all");
   const [viewMode, setViewMode] = useState("grid");
   const [formMode, setFormMode] = useState(null);
   const [editingPatient, setEditingPatient] = useState(null);
+  const [safetyAction, setSafetyAction] = useState(null);
   const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
 
+  const selectedLive = selected ? (PATIENTS.find(p => p.id === selected.id) || selected) : null;
   const openCreate = () => { setEditingPatient(null); setFormMode("create"); };
   const openEdit = (patient) => { setSelected(null); setEditingPatient(patient); setFormMode("edit"); };
   const closeForm = () => { setFormMode(null); setEditingPatient(null); };
+  const openSafetyAction = (action, patient) => setSafetyAction({ action, patient });
+  const closeSafetyAction = async (changed=false) => {
+    setSafetyAction(null);
+    if (changed) {
+      setSelected(null);
+      await onDataChanged?.();
+    }
+  };
 
   const filtered = useMemo(() => PATIENTS.filter(p => {
-    const q = search.toLowerCase();
-    const matchSearch = !q || p.initials.toLowerCase().includes(q) || p.id.toLowerCase().includes(q) || p.dx_main.toLowerCase().includes(q);
-    const matchRisk   = riskFilter === "all" || p.risk === riskFilter;
+    const q = normalizeText(search);
+    const quick = QUICK_PATIENT_FILTERS.find(f => f.id === quickFilter) || QUICK_PATIENT_FILTERS[0];
+    const matchSearch = !q || patientSearchHaystack(p).includes(q);
+    const matchRisk   = riskFilter === "all" || p.risk === riskFilter || p.suicide_risk === riskFilter || p.social_risk === riskFilter;
     const matchStatus = statusFilter === "all" || p.status === statusFilter;
-    return matchSearch && matchRisk && matchStatus;
-  }), [search, riskFilter, statusFilter, workspaceKey]);
+    return matchSearch && matchRisk && matchStatus && quick.fn(p);
+  }), [search, riskFilter, statusFilter, quickFilter, workspaceKey]);
+
+  const resultLabel = search ? `Búsqueda: “${search}”` : "Búsqueda avanzada por RUT, nombre, contacto, diagnóstico, profesional, alerta, clozapina, LAI o estado.";
 
   return (
     <div>
-      {selected && <PatientDetail patient={selected} onClose={() => setSelected(null)} onEdit={openEdit} />}
+      {selectedLive && <PatientDetail patient={selectedLive} onClose={() => setSelected(null)} onEdit={openEdit} onSafetyAction={openSafetyAction} authSession={authSession} onDataChanged={onDataChanged} />}
       {formMode && (
         <PatientFormModal
           mode={formMode}
@@ -2549,54 +4930,97 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
           onSaved={onDataChanged}
         />
       )}
-      {/* Filtros */}
-      <div className="flex flex-wrap items-center gap-3 mb-5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">Riesgo:</span>
-          {["all","critico","alto","medio","bajo","no_evaluado"].map(r => (
-            <button key={r} onClick={() => setRiskFilter(r)}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
-                ${riskFilter === r
-                  ? (r==="all" ? "bg-slate-600 border-slate-500 text-white" : `${getRiskCfg(r).bg} ${getRiskCfg(r).border} ${getRiskCfg(r).text}`)
-                  : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200"}`}>
-              {r === "all" ? "Todos" : getRiskCfg(r).label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 ml-auto">
+      {safetyAction && (
+        <PatientSafetyActionModal
+          action={safetyAction.action}
+          patient={safetyAction.patient}
+          authSession={authSession}
+          onClose={closeSafetyAction}
+          onSaved={onDataChanged}
+        />
+      )}
+
+      <div className="mb-4 rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-black text-slate-100">Explorador de pacientes</div>
+            <div className="text-[11px] text-slate-500">{resultLabel}</div>
+          </div>
           {USING_SUPABASE_DATA && (
             <button
               onClick={openCreate}
-              disabled={!isAdmin}
-              title={isAdmin ? "Crear paciente en Supabase" : "Solo administrador puede crear pacientes en esta versión"}
-              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1 text-xs font-black text-sky-300 hover:bg-sky-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={false}
+              title="Crear paciente en Supabase"
+              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-600/30"
             >
               + Nuevo paciente
             </button>
           )}
-          <button onClick={() => setViewMode("grid")} className={`px-2 py-1 text-xs rounded border ${viewMode==="grid" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>▦ Tarjetas</button>
-          <button onClick={() => setViewMode("table")} className={`px-2 py-1 text-xs rounded border ${viewMode==="table" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>≡ Tabla</button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500">Filtro rápido:</span>
+          {QUICK_PATIENT_FILTERS.map(f => (
+            <button key={f.id} onClick={() => setQuickFilter(f.id)}
+              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${quickFilter === f.id ? "border-sky-500 bg-sky-600/20 text-sky-300" : "border-slate-700 bg-slate-900/40 text-slate-400 hover:text-slate-100"}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Riesgo:</span>
+            {[
+              ["all", "Todos"], ["critico", "Crítico"], ["alto", "Alto"], ["medio", "Medio"], ["bajo", "Bajo"], ["no_evaluado", "N/E"]
+            ].map(([r,l]) => (
+              <button key={r} onClick={() => setRiskFilter(r)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                  ${riskFilter === r
+                    ? (r==="all" ? "bg-slate-600 border-slate-500 text-white" : `${getRiskCfg(r).bg} ${getRiskCfg(r).border} ${getRiskCfg(r).text}`)
+                    : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200"}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Estado:</span>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+              <option value="all">Todos</option>
+              {Object.entries(STATUS_CONFIG).map(([k,c]) => <option key={k} value={k}>{c.label}</option>)}
+            </select>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setViewMode("grid")} className={`px-2 py-1 text-xs rounded border ${viewMode==="grid" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>▦ Tarjetas</button>
+            <button onClick={() => setViewMode("compact")} className={`px-2 py-1 text-xs rounded border ${viewMode==="compact" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>☰ Compacta</button>
+            <button onClick={() => setViewMode("table")} className={`px-2 py-1 text-xs rounded border ${viewMode==="table" ? "bg-sky-600/20 border-sky-600 text-sky-400" : "border-slate-700 text-slate-500"}`}>≡ Tabla</button>
+          </div>
         </div>
       </div>
+
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""}</div>
+        <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""} · {PATIENTS.length} en esta institución</div>
         {USING_SUPABASE_DATA && (
           <div className="text-[10px] text-slate-500">
-            {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes editar pacientes asignados. La reasignación de equipo queda para admin."}
+            {isAdmin ? "Puedes crear, editar y gestionar tratancias." : "Puedes ver todos los pacientes de la institución. Para editar, toma tratancia del caso."}
           </div>
         )}
       </div>
 
       {viewMode === "grid" ? (
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-5 p-1">
           {filtered.map(p => <PatientCard key={p.id} patient={p} onClick={setSelected} />)}
+        </div>
+      ) : viewMode === "compact" ? (
+        <div className="space-y-2 p-1">
+          {filtered.map(p => <PatientCard key={p.id} patient={p} onClick={setSelected} compact />)}
         </div>
       ) : (
         <div className="bg-[#131920] rounded-xl border border-slate-800 overflow-hidden">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wider">
-                {["ID","Paciente","Edad","Diagnóstico","Riesgo","Estado","Próx. control","Responsable"].map(h => (
+                {["RUT","Nombre","Edad","Diagnóstico","Familias dx","Riesgo","Estado","Próx. control","Responsable"].map(h => (
                   <th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>
                 ))}
               </tr>
@@ -2605,10 +5029,11 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
               {filtered.map((p, i) => (
                 <tr key={p.id} onClick={() => setSelected(p)}
                   className={`border-b border-slate-800/50 hover:bg-[#1a2332] cursor-pointer transition-colors ${i%2===0?"":"bg-slate-900/20"}`}>
-                  <td className="px-4 py-3 font-mono text-slate-500">{p.id}</td>
-                  <td className="px-4 py-3 text-slate-200 font-semibold">{p.initials}</td>
+                  <td className="px-4 py-3 font-mono text-slate-500">{p.rut || p.id}</td>
+                  <td className="px-4 py-3 text-slate-200 font-semibold">{p.full_name || p.initials}</td>
                   <td className="px-4 py-3 text-slate-400">{p.age}</td>
-                  <td className="px-4 py-3 text-slate-300 max-w-[200px] truncate">{p.dx_main}</td>
+                  <td className="px-4 py-3 text-slate-300 max-w-[220px] truncate">{p.dx_main}</td>
+                  <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{getPatientDxTags(p).slice(0,3).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-black" style={{ color:t.color, borderColor:t.color }}>{t.label}</span>)}</div></td>
                   <td className="px-4 py-3"><RiskBadge risk={p.risk} small /></td>
                   <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
                   <td className="px-4 py-3 font-mono text-slate-400">{p.next_control || <span className="text-red-400">—</span>}</td>
@@ -2687,6 +5112,94 @@ const ProfesionalesView = () => (
     </div>
   </div>
 );
+
+
+// ─── ACCIONES CLÍNICAS AUTOMÁTICAS ───────────────────────────────────────
+const AccionesClinicasView = ({ authSession, onDataChanged }) => {
+  const [filter, setFilter] = useState("all");
+  const [syncing, setSyncing] = useState(false);
+  const [message, setMessage] = useState("");
+  const actions = getAutomaticClinicalActions();
+  const filtered = actions.filter(action => filter === "all" || action.priority === filter || action.source === filter || (filter === "hoy" && (action.priority === "critico" || action.dueDays <= 0)) || (filter === "semana" && action.dueDays > 0 && action.dueDays <= 7));
+  const exportRows = actions.map(a => ({
+    prioridad: getRiskCfg(a.priority).label,
+    fuente: a.source,
+    paciente: a.patient,
+    iniciales: a.initials,
+    titulo: a.title,
+    fecha_limite: a.due,
+    dias: a.dueDays,
+    responsable: a.responsibleName,
+    detalle: a.detail,
+    sugerencia: a.recommendation,
+  }));
+
+  const syncAutomaticAlerts = async () => {
+    setMessage("");
+    if (!isSupabaseConfigured || !authSession?.user?.id) {
+      setMessage("Modo demo: las acciones se calculan en pantalla, pero no se guardan como alertas.");
+      return;
+    }
+    const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+    if (!membership?.institutionDbId) {
+      setMessage("No se encontró la institución real activa para sincronizar alertas.");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.rpc("clincoord_generate_automatic_alerts", { p_institution_id: membership.institutionDbId });
+      if (error) throw error;
+      const result = Array.isArray(data) ? data[0] : data;
+      setMessage(`Alertas automáticas sincronizadas. Insertadas: ${result?.inserted_count ?? "?"}; actualizadas: ${result?.updated_count ?? "?"}.`);
+      await onDataChanged?.();
+    } catch (error) {
+      console.error(error);
+      setMessage(error?.message || "No se pudieron sincronizar alertas automáticas.");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-slate-800 bg-[#131920] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-black text-slate-100">Tablero de acciones clínicas</div>
+            <div className="mt-1 max-w-2xl text-sm text-slate-400">Prioriza automáticamente casos por vencimientos de clozapina, inyectables de depósito, controles, inasistencias y riesgo crítico. Usa esto como apoyo de coordinación, no como reemplazo de juicio clínico.</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={syncAutomaticAlerts} disabled={syncing} className="rounded-full border border-sky-700 bg-sky-900/30 px-3 py-2 text-xs font-black text-sky-300 hover:bg-sky-900/50 disabled:opacity-50">{syncing ? "Sincronizando…" : "Generar/actualizar alertas"}</button>
+            <ExportButton rows={exportRows} filename="acciones_clinicas_automaticas" label="Exportar acciones" />
+          </div>
+        </div>
+        {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.includes("No se") ? "border-red-800 bg-red-950/30 text-red-200" : "border-emerald-800 bg-emerald-950/20 text-emerald-300"}`}>{message}</div>}
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          ["Acciones totales", actions.length, "text-sky-400 border-sky-800"],
+          ["Para hoy / vencidas", actions.filter(a=>a.priority === "critico" || a.dueDays <= 0).length, "text-red-400 border-red-800"],
+          ["Próximos 7 días", actions.filter(a=>a.dueDays > 0 && a.dueDays <= 7).length, "text-yellow-400 border-yellow-800"],
+          ["Críticas", actions.filter(a=>a.priority === "critico").length, "text-red-400 border-red-700"],
+        ].map(([l,v,c]) => (
+          <div key={l} className={`rounded-xl border bg-[#131920] p-4 ${c.split(" ")[1]}`}>
+            <div className={`text-2xl font-black ${c.split(" ")[0]}`}>{v}</div>
+            <div className="mt-1 text-xs text-slate-400">{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {["all","hoy","semana","critico","alto","medio","clozapina","lai","control","inasistencia","riesgo","alerta"].map(f => (
+          <button key={f} onClick={()=>setFilter(f)} className={`rounded-full border px-2.5 py-1 text-xs font-bold transition-colors ${filter===f ? "border-sky-600 bg-sky-600/20 text-sky-300" : "border-slate-700 text-slate-500 hover:text-slate-300"}`}>{f === "all" ? "Todas" : f}</button>
+        ))}
+      </div>
+
+      <ClinicalActionPanel setPage={null} compact={false} maxItems={filtered.length} actionsOverride={filtered} />
+    </div>
+  );
+};
 
 // ─── ALERTAS ──────────────────────────────────────────────────────────────
 const AlertasView = () => {
@@ -3304,59 +5817,871 @@ const InboxView = () => {
   );
 };
 
-// ─── CONFIGURACIÓN ────────────────────────────────────────────────────────
-const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, activeUser, setActiveUser }) => (
-  <div className="space-y-5 max-w-2xl">
+// ─── CONFIGURACIÓN / USUARIOS Y PERMISOS ────────────────────────────────
+const UserAccessAdminPanel = ({ authSession, activeInstitution, onDataChanged }) => {
+  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [institutions, setInstitutions] = useState([]);
+  const [professionals, setProfessionals] = useState([]);
+  const [message, setMessage] = useState("");
+  const [filter, setFilter] = useState("todos");
+  const [query, setQuery] = useState("");
+  const [form, setForm] = useState({
+    email: "",
+    fullName: "",
+    institutionId: "",
+    role: "psiquiatra",
+    professionalId: "",
+    status: "approved",
+    createProfessional: true,
+  });
+
+  const roleOptions = [
+    ["admin", "Administrador institucional"],
+    ["psiquiatra_jefe", "Psiquiatra jefe"],
+    ["psiquiatra", "Psiquiatra"],
+    ["medico_general", "Médico general"],
+    ["psicologo", "Psicólogo/a"],
+    ["enfermero", "Enfermero/a"],
+    ["tens", "TENS"],
+    ["terapeuta_ocupacional", "Terapeuta ocupacional"],
+    ["trabajador_social", "Trabajador/a social"],
+    ["solo_lectura", "Solo lectura"],
+  ];
+  const roleLabel = Object.fromEntries(roleOptions);
+  const statusLabel = {
+    approved: "Aprobado",
+    pending: "Pendiente",
+    rejected: "Rechazado",
+    suspended: "Suspendido",
+    sin_acceso: "Sin acceso",
+  };
+
+  const buildRows = ({ memberships = [], profiles = [] }) => {
+    const profileMap = new Map((profiles || []).map(p => [p.id, p]));
+    const seenMembershipUsers = new Set();
+    const membershipRows = (memberships || []).map(m => {
+      const profile = profileMap.get(m.user_id) || {};
+      seenMembershipUsers.add(m.user_id);
+      return {
+        kind: "membership",
+        id: m.id,
+        membershipId: m.id,
+        userId: m.user_id,
+        email: profile.email || m.user_id,
+        fullName: profile.full_name || "Sin nombre",
+        isProfileActive: profile.is_active !== false,
+        provider: profile.created_by_auth_provider || "—",
+        institutionId: m.institution_id,
+        institutionName: m.institutions?.name || "—",
+        institutionSlug: m.institutions?.slug,
+        role: m.role,
+        professionalId: m.professional_id || "",
+        professionalName: m.professionals?.full_name || "Sin asociar",
+        status: m.status || "approved",
+        isActive: m.is_active !== false,
+        isDefault: Boolean(m.is_default),
+      };
+    });
+    const pendingRows = (profiles || [])
+      .filter(p => !seenMembershipUsers.has(p.id))
+      .map(p => ({
+        kind: "profile",
+        id: `profile-${p.id}`,
+        membershipId: null,
+        userId: p.id,
+        email: p.email,
+        fullName: p.full_name || "Sin nombre",
+        isProfileActive: p.is_active !== false,
+        provider: p.created_by_auth_provider || "—",
+        institutionId: "",
+        institutionName: "Sin institución",
+        institutionSlug: "",
+        role: "sin_rol",
+        professionalId: "",
+        professionalName: "Sin asociar",
+        status: "sin_acceso",
+        isActive: p.is_active !== false,
+        isDefault: false,
+      }));
+    return [...pendingRows, ...membershipRows].sort((a, b) => {
+      const statusOrder = { sin_acceso: 0, pending: 1, approved: 2, suspended: 3, rejected: 4 };
+      const so = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+      if (so !== 0) return so;
+      return `${a.email}-${a.institutionName}`.localeCompare(`${b.email}-${b.institutionName}`);
+    });
+  };
+
+  const loadAccessData = async () => {
+    if (!authSession?.user?.id || !isSupabaseConfigured) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const [membershipsRes, profilesRes, institutionsRes, professionalsRes] = await Promise.all([
+        supabase
+          .from("memberships")
+          .select("id,user_id,institution_id,professional_id,role,status,is_active,is_default,created_at,institutions(id,name,slug),professionals(id,full_name,role,email,initials)")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("profiles")
+          .select("id,email,full_name,is_active,created_by_auth_provider,created_at")
+          .order("created_at", { ascending: false }),
+        supabase.from("institutions").select("id,name,slug,kind").order("name"),
+        supabase.from("professionals").select("id,institution_id,full_name,role,email,initials").order("full_name"),
+      ]);
+      const err = membershipsRes.error || profilesRes.error || institutionsRes.error || professionalsRes.error;
+      if (err) throw err;
+      const profilesData = profilesRes.data || [];
+      const membershipsData = membershipsRes.data || [];
+      setProfiles(profilesData);
+      setRows(buildRows({ memberships: membershipsData, profiles: profilesData }));
+      setInstitutions(institutionsRes.data || []);
+      setProfessionals(professionalsRes.data || []);
+      const activeDbId = getMembershipForWorkspace(activeInstitution)?.institutionDbId;
+      setForm(prev => ({ ...prev, institutionId: prev.institutionId || activeDbId || institutionsRes.data?.[0]?.id || "" }));
+    } catch (error) {
+      setMessage(error?.message || "No se pudieron cargar usuarios y permisos.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadAccessData(); }, [authSession?.user?.id, activeInstitution]);
+
+  const filteredProfessionals = professionals.filter(p => !form.institutionId || p.institution_id === form.institutionId);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRows = rows.filter(row => {
+    const matchesFilter = filter === "todos" ||
+      (filter === "sin_acceso" && row.status === "sin_acceso") ||
+      (filter === "approved" && row.status === "approved") ||
+      (filter === "pending" && row.status === "pending") ||
+      (filter === "suspended" && row.status === "suspended") ||
+      (filter === "rejected" && row.status === "rejected");
+    const matchesQuery = !normalizedQuery ||
+      row.email?.toLowerCase().includes(normalizedQuery) ||
+      row.fullName?.toLowerCase().includes(normalizedQuery) ||
+      row.institutionName?.toLowerCase().includes(normalizedQuery) ||
+      row.professionalName?.toLowerCase().includes(normalizedQuery);
+    return matchesFilter && matchesQuery;
+  });
+
+  const getProfileByEmail = (email) => profiles.find(p => p.email?.toLowerCase() === email?.trim().toLowerCase());
+
+  const handleEmailChange = (email) => {
+    const profile = getProfileByEmail(email);
+    setForm(prev => ({
+      ...prev,
+      email,
+      fullName: profile?.full_name && !prev.fullName ? profile.full_name : prev.fullName,
+    }));
+  };
+
+  const prefillFromRow = (row) => {
+    setForm({
+      email: row.email || "",
+      fullName: row.fullName || "",
+      institutionId: row.institutionId || form.institutionId || institutions[0]?.id || "",
+      role: row.role && row.role !== "sin_rol" ? row.role : "psiquiatra",
+      professionalId: row.professionalId || "",
+      status: row.status && row.status !== "sin_acceso" ? row.status : "approved",
+      createProfessional: !row.professionalId,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleAssign = async (e) => {
+    e?.preventDefault?.();
+    setLoading(true);
+    setMessage("");
+    try {
+      if (!form.email.trim()) throw new Error("Escribe el email del usuario.");
+      if (!form.institutionId) throw new Error("Selecciona institución.");
+      const profile = getProfileByEmail(form.email);
+      const finalName = form.fullName.trim() || profile?.full_name || form.email.split("@")[0];
+      const { error } = await supabase.rpc("clincoord_assign_membership_v2", {
+        p_email: form.email.trim().toLowerCase(),
+        p_institution_id: form.institutionId,
+        p_role: form.role,
+        p_professional_id: form.professionalId || null,
+        p_status: form.status,
+        p_full_name: finalName,
+        p_create_professional: Boolean(form.createProfessional || !form.professionalId),
+      });
+      if (error) throw error;
+      setMessage("Permiso guardado. Si el usuario está conectado, debe recargar o volver a iniciar sesión.");
+      setForm(prev => ({ ...prev, email: "", fullName: "", professionalId: "", createProfessional: true }));
+      await loadAccessData();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar el permiso.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const quickStatus = async (row, status) => {
+    if (!row.email || !row.institutionId) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { error } = await supabase.rpc("clincoord_assign_membership_v2", {
+        p_email: row.email.toLowerCase(),
+        p_institution_id: row.institutionId,
+        p_role: row.role && row.role !== "sin_rol" ? row.role : "solo_lectura",
+        p_professional_id: row.professionalId || null,
+        p_status: status,
+        p_full_name: row.fullName || row.email.split("@")[0],
+        p_create_professional: false,
+      });
+      if (error) throw error;
+      setMessage(status === "approved" ? "Usuario aprobado." : status === "suspended" ? "Acceso suspendido." : "Estado actualizado.");
+      await loadAccessData();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo actualizar el estado.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!authSession) return null;
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Usuarios y permisos</div>
+          <div className="text-xs text-slate-500 mt-1">El login crea identidad; esta sección asigna institución, rol, estado y registro profesional asociado.</div>
+        </div>
+        <button onClick={loadAccessData} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800">{loading ? "Cargando…" : "Actualizar"}</button>
+      </div>
+
+      <form onSubmit={handleAssign} className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Email del usuario</label>
+          <input value={form.email} onChange={e => handleEmailChange(e.target.value)} placeholder="usuario@correo.com" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          <div className="mt-1 text-[10px] text-slate-500">El usuario debe haber iniciado sesión con Google/email o existir en Supabase Auth.</div>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre visible</label>
+          <input value={form.fullName} onChange={e => setForm({...form, fullName:e.target.value})} placeholder="Nombre que verá el equipo" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          <div className="mt-1 text-[10px] text-slate-500">También actualiza el registro profesional si se crea automáticamente.</div>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Institución</label>
+          <select value={form.institutionId} onChange={e => setForm({...form, institutionId:e.target.value, professionalId:""})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+            {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Rol</label>
+          <select value={form.role} onChange={e => setForm({...form, role:e.target.value, createProfessional: e.target.value !== "solo_lectura"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+            {roleOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Registro profesional asociado</label>
+          <select value={form.professionalId} onChange={e => setForm({...form, professionalId:e.target.value, createProfessional: !e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+            <option value="">Sin asociar / crear automáticamente</option>
+            {filteredProfessionals.map(p => <option key={p.id} value={p.id}>{p.full_name} · {roleLabel[p.role] || p.role}</option>)}
+          </select>
+          <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400">
+            <input type="checkbox" checked={form.createProfessional} onChange={e => setForm({...form, createProfessional:e.target.checked})} className="accent-sky-500" />
+            Crear/actualizar registro profesional si no hay uno seleccionado
+          </label>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
+          <select value={form.status} onChange={e => setForm({...form, status:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+            <option value="approved">Aprobado</option>
+            <option value="pending">Pendiente</option>
+            <option value="rejected">Rechazado</option>
+            <option value="suspended">Suspendido</option>
+          </select>
+        </div>
+        <div className="md:col-span-2 flex items-center justify-end gap-2">
+          <button type="button" onClick={() => setForm({ email:"", fullName:"", institutionId: form.institutionId, role:"psiquiatra", professionalId:"", status:"approved", createProfessional:true })} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">Guardar permiso</button>
+        </div>
+      </form>
+
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-amber-800 bg-amber-900/20 text-amber-300"}`}>{message}</div>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar usuario, email, institución…" className="min-w-[240px] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+        {[
+          ["todos", "Todos"], ["sin_acceso", "Sin acceso"], ["pending", "Pendientes"], ["approved", "Aprobados"], ["suspended", "Suspendidos"], ["rejected", "Rechazados"]
+        ].map(([value,label]) => (
+          <button key={value} onClick={() => setFilter(value)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${filter === value ? "border-sky-500 bg-sky-600 text-white" : "border-slate-700 text-slate-400 hover:bg-slate-800"}`}>{label}</button>
+        ))}
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full min-w-[920px] text-xs">
+          <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
+            <tr>
+              <th className="px-3 py-2 text-left">Usuario</th>
+              <th className="px-3 py-2 text-left">Institución</th>
+              <th className="px-3 py-2 text-left">Rol</th>
+              <th className="px-3 py-2 text-left">Profesional</th>
+              <th className="px-3 py-2 text-left">Estado</th>
+              <th className="px-3 py-2 text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map(r => (
+              <tr key={r.id} className="border-t border-slate-800">
+                <td className="px-3 py-2">
+                  <div className="font-semibold text-slate-200">{r.fullName || "—"}</div>
+                  <div className="text-slate-500">{r.email || r.userId}</div>
+                  <div className="text-[10px] text-slate-600">{r.provider}</div>
+                </td>
+                <td className="px-3 py-2 text-slate-300">{r.institutionName || "Sin institución"}{r.isDefault && <span className="ml-1 text-[10px] text-sky-400">· default</span>}</td>
+                <td className="px-3 py-2 text-sky-400 font-semibold">{roleLabel[r.role] || r.role || "Sin rol"}</td>
+                <td className="px-3 py-2 text-slate-400">{r.professionalName || "Sin asociar"}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${r.status === "approved" ? "border-emerald-700 text-emerald-400" : r.status === "suspended" ? "border-red-700 text-red-400" : r.status === "sin_acceso" ? "border-slate-700 text-slate-400" : "border-amber-700 text-amber-400"}`}>{statusLabel[r.status] || r.status || "—"}</span></td>
+                <td className="px-3 py-2 text-right">
+                  <div className="flex justify-end gap-1">
+                    <button onClick={() => prefillFromRow(r)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar/asignar</button>
+                    {r.kind === "membership" && r.status !== "approved" && <button onClick={() => quickStatus(r, "approved")} className="rounded-lg border border-emerald-700 px-2 py-1 text-[10px] font-bold text-emerald-400 hover:bg-emerald-900/20">Aprobar</button>}
+                    {r.kind === "membership" && r.status !== "suspended" && <button onClick={() => quickStatus(r, "suspended")} className="rounded-lg border border-red-700 px-2 py-1 text-[10px] font-bold text-red-400 hover:bg-red-900/20">Suspender</button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!visibleRows.length && <tr><td colSpan="6" className="px-3 py-6 text-center text-slate-500">Sin usuarios visibles para este filtro.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+
+const ROLE_OPTIONS_ADMIN = [
+  ["admin", "Administrador institucional"],
+  ["psiquiatra_jefe", "Psiquiatra jefe"],
+  ["psiquiatra", "Psiquiatra"],
+  ["medico_general", "Médico general"],
+  ["psicologo", "Psicólogo/a"],
+  ["enfermero", "Enfermero/a"],
+  ["tens", "TENS"],
+  ["terapeuta_ocupacional", "Terapeuta ocupacional"],
+  ["trabajador_social", "Trabajador/a social"],
+  ["solo_lectura", "Solo lectura"],
+];
+const ROLE_LABEL_ADMIN = Object.fromEntries(ROLE_OPTIONS_ADMIN);
+
+const INSTITUTION_KIND_OPTIONS = [
+  ["centro_medico", "Centro médico"],
+  ["hospital", "Hospital"],
+  ["clinica", "Clínica"],
+  ["cosam", "COSAM / red pública"],
+  ["consulta_privada", "Consulta privada"],
+  ["otro", "Otro"],
+];
+const KIND_LABELS = Object.fromEntries(INSTITUTION_KIND_OPTIONS);
+
+const InstitutionsAdminPanel = ({ onDataChanged }) => {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [items, setItems] = useState([]);
+  const [form, setForm] = useState({ id:"", name:"", slug:"", kind:"centro_medico", description:"", isActive:true });
+
+  const slugify = (value) => (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+
+  const loadInstitutionsAdmin = async () => {
+    if (!isSupabaseConfigured) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { data, error } = await supabase
+        .from("institutions")
+        .select("id,slug,name,kind,description,is_active,created_at")
+        .order("name");
+      if (error) throw error;
+      setItems(data || []);
+    } catch (error) {
+      setMessage(error?.message || "No se pudieron cargar instituciones.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadInstitutionsAdmin(); }, []);
+
+  const resetForm = () => setForm({ id:"", name:"", slug:"", kind:"centro_medico", description:"", isActive:true });
+
+  const editInstitution = (item) => {
+    setForm({
+      id: item.id,
+      name: item.name || "",
+      slug: item.slug || "",
+      kind: item.kind || "otro",
+      description: item.description || "",
+      isActive: item.is_active !== false,
+    });
+  };
+
+  const saveInstitution = async (e) => {
+    e?.preventDefault?.();
+    setLoading(true);
+    setMessage("");
+    try {
+      const name = form.name.trim();
+      const slug = slugify(form.slug || form.name);
+      if (!name) throw new Error("Escribe el nombre de la institución.");
+      if (!slug) throw new Error("No se pudo generar un slug válido.");
+      const { data, error } = await supabase.rpc("clincoord_upsert_institution_v1", {
+        p_institution_id: form.id || null,
+        p_name: name,
+        p_slug: slug,
+        p_kind: form.kind,
+        p_description: form.description?.trim() || null,
+        p_is_active: Boolean(form.isActive),
+      });
+      if (error) throw error;
+      setMessage(form.id ? "Institución actualizada." : "Institución creada.");
+      resetForm();
+      await loadInstitutionsAdmin();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar la institución.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Instituciones</div>
+          <div className="text-xs text-slate-500 mt-1">Crea y administra centros, hospitales, clínicas u otros espacios. Solo superadmin puede crear nuevas instituciones.</div>
+        </div>
+        <button onClick={loadInstitutionsAdmin} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+      </div>
+
+      <form onSubmit={saveInstitution} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre de institución</label>
+            <input value={form.name} onChange={e => setForm({...form, name:e.target.value, slug: form.id ? form.slug : slugify(e.target.value)})} placeholder="Ej: Clínica Norte" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Slug interno</label>
+            <input value={form.slug} onChange={e => setForm({...form, slug:slugify(e.target.value)})} placeholder="clinica-norte" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Tipo</label>
+            <select value={form.kind} onChange={e => setForm({...form, kind:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {INSTITUTION_KIND_OPTIONS.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
+            <select value={form.isActive ? "true" : "false"} onChange={e => setForm({...form, isActive:e.target.value === "true"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              <option value="true">Activa</option>
+              <option value="false">Inactiva</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Descripción</label>
+            <textarea value={form.description} onChange={e => setForm({...form, description:e.target.value})} rows={2} placeholder="Descripción breve del espacio institucional" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear institución"}</button>
+        </div>
+      </form>
+
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full min-w-[780px] text-xs">
+          <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
+            <tr><th className="px-3 py-2 text-left">Institución</th><th className="px-3 py-2 text-left">Tipo</th><th className="px-3 py-2 text-left">Slug</th><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-right">Acciones</th></tr>
+          </thead>
+          <tbody>
+            {items.map(item => (
+              <tr key={item.id} className="border-t border-slate-800">
+                <td className="px-3 py-2"><div className="font-semibold text-slate-200">{item.name}</div><div className="text-slate-500">{item.description || "Sin descripción"}</div></td>
+                <td className="px-3 py-2 text-slate-300">{KIND_LABELS[item.kind] || item.kind || "—"}</td>
+                <td className="px-3 py-2 font-mono text-slate-500">{item.slug}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${item.is_active !== false ? "border-emerald-700 text-emerald-400" : "border-red-700 text-red-400"}`}>{item.is_active !== false ? "Activa" : "Inactiva"}</span></td>
+                <td className="px-3 py-2 text-right"><button onClick={() => editInstitution(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button></td>
+              </tr>
+            ))}
+            {!items.length && <tr><td colSpan="5" className="px-3 py-6 text-center text-slate-500">Sin instituciones visibles.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ProfessionalsAdminPanel = ({ activeInstitution, onDataChanged }) => {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [institutions, setInstitutions] = useState([]);
+  const [items, setItems] = useState([]);
+  const defaultInstitutionId = getMembershipForWorkspace(activeInstitution)?.institutionDbId || "";
+  const [filterInstitutionId, setFilterInstitutionId] = useState(defaultInstitutionId);
+  const [form, setForm] = useState({ id:"", institutionId: defaultInstitutionId, fullName:"", role:"psiquiatra", specialty:"", email:"", initials:"", isActive:true });
+
+  const makeInitials = (name) => (name || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join("") || "PR";
+
+  const loadProfessionalsAdmin = async () => {
+    if (!isSupabaseConfigured) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const [institutionsRes, professionalsRes] = await Promise.all([
+        supabase.from("institutions").select("id,name,slug,is_active").order("name"),
+        supabase.from("professionals").select("id,institution_id,full_name,role,specialty,email,initials,avatar_color,is_active,institutions(id,name,slug)").order("full_name"),
+      ]);
+      const err = institutionsRes.error || professionalsRes.error;
+      if (err) throw err;
+      const inst = institutionsRes.data || [];
+      setInstitutions(inst);
+      setItems(professionalsRes.data || []);
+      setFilterInstitutionId(prev => prev || defaultInstitutionId || inst[0]?.id || "");
+      setForm(prev => ({ ...prev, institutionId: prev.institutionId || defaultInstitutionId || inst[0]?.id || "" }));
+    } catch (error) {
+      setMessage(error?.message || "No se pudieron cargar profesionales.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadProfessionalsAdmin(); }, [activeInstitution]);
+
+  const resetForm = () => setForm({ id:"", institutionId: filterInstitutionId || defaultInstitutionId || institutions[0]?.id || "", fullName:"", role:"psiquiatra", specialty:"", email:"", initials:"", isActive:true });
+
+  const editProfessional = (item) => {
+    setForm({
+      id: item.id,
+      institutionId: item.institution_id || filterInstitutionId || "",
+      fullName: item.full_name || "",
+      role: item.role || "psiquiatra",
+      specialty: item.specialty || "",
+      email: item.email || "",
+      initials: item.initials || makeInitials(item.full_name),
+      isActive: item.is_active !== false,
+    });
+  };
+
+  const visibleProfessionals = items.filter(p => !filterInstitutionId || p.institution_id === filterInstitutionId);
+
+  const saveProfessional = async (e) => {
+    e?.preventDefault?.();
+    setLoading(true);
+    setMessage("");
+    try {
+      const fullName = form.fullName.trim();
+      if (!form.institutionId) throw new Error("Selecciona institución.");
+      if (!fullName) throw new Error("Escribe el nombre del profesional.");
+      const { error } = await supabase.rpc("clincoord_upsert_professional_v1", {
+        p_professional_id: form.id || null,
+        p_institution_id: form.institutionId,
+        p_full_name: fullName,
+        p_role: form.role,
+        p_specialty: form.specialty?.trim() || null,
+        p_email: form.email?.trim().toLowerCase() || null,
+        p_initials: (form.initials?.trim() || makeInitials(fullName)).slice(0, 6).toUpperCase(),
+        p_is_active: Boolean(form.isActive),
+      });
+      if (error) throw error;
+      setMessage(form.id ? "Profesional actualizado." : "Profesional creado.");
+      resetForm();
+      await loadProfessionalsAdmin();
+      onDataChanged?.();
+    } catch (error) {
+      setMessage(error?.message || "No se pudo guardar el profesional.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Profesionales institucionales</div>
+          <div className="text-xs text-slate-500 mt-1">Crea profesionales por institución. Luego puedes asociarlos a usuarios y pacientes.</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={filterInstitutionId} onChange={e => { setFilterInstitutionId(e.target.value); setForm(prev => ({ ...prev, institutionId:e.target.value })); }} className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-bold text-slate-300 outline-none focus:border-sky-500">
+            <option value="">Todas</option>
+            {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <button onClick={loadProfessionalsAdmin} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+        </div>
+      </div>
+
+      <form onSubmit={saveProfessional} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Institución</label>
+            <select value={form.institutionId} onChange={e => setForm({...form, institutionId:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Nombre</label>
+            <input value={form.fullName} onChange={e => setForm({...form, fullName:e.target.value, initials: form.initials || makeInitials(e.target.value)})} placeholder="Dra. Nombre Apellido" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Rol</label>
+            <select value={form.role} onChange={e => setForm({...form, role:e.target.value})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+              {ROLE_OPTIONS_ADMIN.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Especialidad / cargo</label>
+            <input value={form.specialty} onChange={e => setForm({...form, specialty:e.target.value})} placeholder="Psiquiatría adultos, enfermería SM…" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Email institucional/opcional</label>
+            <input value={form.email} onChange={e => setForm({...form, email:e.target.value})} placeholder="profesional@correo.com" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Iniciales</label>
+              <input value={form.initials} onChange={e => setForm({...form, initials:e.target.value.toUpperCase()})} placeholder="VR" className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</label>
+              <select value={form.isActive ? "true" : "false"} onChange={e => setForm({...form, isActive:e.target.value === "true"})} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500">
+                <option value="true">Activo</option>
+                <option value="false">Inactivo</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear profesional"}</button>
+        </div>
+      </form>
+
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full min-w-[900px] text-xs">
+          <thead className="bg-slate-900/70 text-slate-500 uppercase tracking-wider">
+            <tr><th className="px-3 py-2 text-left">Profesional</th><th className="px-3 py-2 text-left">Institución</th><th className="px-3 py-2 text-left">Rol</th><th className="px-3 py-2 text-left">Email</th><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-right">Acciones</th></tr>
+          </thead>
+          <tbody>
+            {visibleProfessionals.map(item => (
+              <tr key={item.id} className="border-t border-slate-800">
+                <td className="px-3 py-2"><div className="font-semibold text-slate-200">{item.full_name}</div><div className="text-slate-500">{item.specialty || "Sin especialidad"} · {item.initials || "—"}</div></td>
+                <td className="px-3 py-2 text-slate-300">{item.institutions?.name || "—"}</td>
+                <td className="px-3 py-2 text-sky-400 font-semibold">{ROLE_LABEL_ADMIN[item.role] || item.role}</td>
+                <td className="px-3 py-2 text-slate-500">{item.email || "—"}</td>
+                <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 ${item.is_active !== false ? "border-emerald-700 text-emerald-400" : "border-red-700 text-red-400"}`}>{item.is_active !== false ? "Activo" : "Inactivo"}</span></td>
+                <td className="px-3 py-2 text-right"><button onClick={() => editProfessional(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button></td>
+              </tr>
+            ))}
+            {!visibleProfessionals.length && <tr><td colSpan="6" className="px-3 py-6 text-center text-slate-500">Sin profesionales visibles.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+
+const PatientLocationCategoriesPanel = ({ activeInstitution, onDataChanged }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [form, setForm] = useState({ id:"", kind:"sector", name:"", color:"sky", description:"", sortOrder:0, isActive:true });
+  const membership = getMembershipForWorkspace(activeInstitution);
+  const institutionId = membership?.institutionDbId;
+
+  const loadItems = async () => {
+    if (!isSupabaseConfigured || !institutionId) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { data, error } = await supabase
+        .from("patient_location_categories")
+        .select("id,institution_id,kind,name,color,description,is_active,sort_order")
+        .eq("institution_id", institutionId)
+        .order("kind")
+        .order("sort_order", { ascending:true })
+        .order("name", { ascending:true });
+      if (error) throw error;
+      setItems(data || []);
+    } catch (err) {
+      setMessage(err?.message || "No se pudieron cargar sectores/consultorios.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { loadItems(); }, [institutionId]);
+  const resetForm = () => setForm({ id:"", kind:"sector", name:"", color:"sky", description:"", sortOrder:0, isActive:true });
+  const editItem = (item) => setForm({
+    id:item.id,
+    kind:item.kind || "sector",
+    name:item.name || "",
+    color:item.color || "sky",
+    description:item.description || "",
+    sortOrder:item.sort_order ?? 0,
+    isActive:item.is_active !== false,
+  });
+  const saveItem = async (e) => {
+    e?.preventDefault?.();
+    if (!institutionId) return setMessage("No hay institución activa válida.");
+    setLoading(true);
+    setMessage("");
+    try {
+      const payload = {
+        institution_id: institutionId,
+        kind: form.kind,
+        name: form.name.trim(),
+        color: form.color,
+        description: form.description?.trim() || null,
+        sort_order: Number(form.sortOrder) || 0,
+        is_active: Boolean(form.isActive),
+      };
+      if (!payload.name) throw new Error("Escribe un nombre.");
+      const result = form.id
+        ? await supabase.from("patient_location_categories").update(payload).eq("id", form.id)
+        : await supabase.from("patient_location_categories").insert(payload);
+      if (result.error) throw result.error;
+      setMessage(form.id ? "Categoría actualizada." : "Categoría creada.");
+      resetForm();
+      await loadItems();
+      onDataChanged?.();
+    } catch (err) {
+      setMessage(err?.message || "No se pudo guardar la categoría.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-slate-300 font-semibold text-sm">Sectores y consultorios</div>
+          <div className="text-xs text-slate-500 mt-1">Crea categorías propias por institución: letras, colores, salas, unidades, policlínicos o consultorios inscritos.</div>
+        </div>
+        <button onClick={loadItems} disabled={loading} className="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-800 disabled:opacity-60">Actualizar</button>
+      </div>
+      <form onSubmit={saveItem} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+          <div className="md:col-span-1"><FieldLabel>Tipo</FieldLabel><SelectInput value={form.kind} onChange={v => setForm({...form, kind:v})}><option value="sector">Sector</option><option value="consultorio">Consultorio</option></SelectInput></div>
+          <div className="md:col-span-2"><FieldLabel>Nombre</FieldLabel><TextInput value={form.name} onChange={v => setForm({...form, name:v})} placeholder="Ej: Sector A / Policlínico Norte" /></div>
+          <div><FieldLabel>Color</FieldLabel><SelectInput value={form.color} onChange={v => setForm({...form, color:v})}>{LOCATION_COLOR_OPTIONS.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</SelectInput></div>
+          <div><FieldLabel>Orden</FieldLabel><TextInput type="number" value={form.sortOrder} onChange={v => setForm({...form, sortOrder:v})} /></div>
+          <div><FieldLabel>Estado</FieldLabel><SelectInput value={form.isActive ? "true" : "false"} onChange={v => setForm({...form, isActive:v === "true"})}><option value="true">Activo</option><option value="false">Inactivo</option></SelectInput></div>
+          <div className="md:col-span-6"><FieldLabel>Descripción opcional</FieldLabel><TextInput value={form.description} onChange={v => setForm({...form, description:v})} placeholder="Ej: Pacientes del sector rojo / inscritos en CESFAM X" /></div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={resetForm} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800">Limpiar</button>
+          <button type="submit" disabled={loading} className="rounded-xl bg-sky-600 px-5 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-60">{form.id ? "Guardar cambios" : "+ Crear categoría"}</button>
+        </div>
+      </form>
+      {message && <div className={`mt-3 rounded-xl border p-3 text-xs ${message.toLowerCase().includes("no") || message.toLowerCase().includes("error") ? "border-red-800 bg-red-900/20 text-red-300" : "border-emerald-800 bg-emerald-900/20 text-emerald-300"}`}>{message}</div>}
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        {["sector", "consultorio"].map(kind => (
+          <div key={kind} className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
+            <div className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">{LOCATION_KIND_LABELS[kind]}</div>
+            <div className="space-y-2">
+              {items.filter(item => item.kind === kind).map(item => (
+                <div key={item.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${LOCATION_COLOR_STYLES[item.color] || LOCATION_COLOR_STYLES.slate}`}>{item.name}</span>{item.is_active === false && <span className="text-[10px] text-red-400">Inactivo</span>}</div>
+                    {item.description && <div className="mt-1 truncate text-[10px] text-slate-500">{item.description}</div>}
+                  </div>
+                  <button type="button" onClick={() => editItem(item)} className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800">Editar</button>
+                </div>
+              ))}
+              {!items.filter(item => item.kind === kind).length && <div className="rounded-xl border border-dashed border-slate-800 p-3 text-xs text-slate-500">Sin categorías.</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ConfiguracionView = ({ activeInstitution, setActiveInstitution, themeMode, setThemeMode, viewMode, setViewMode, autoIsMobile, activeUser, setActiveUser, authSession, onDataChanged }) => (
+  <div className="space-y-5 max-w-5xl">
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
       <div className="text-slate-300 font-semibold text-sm mb-4">Espacios institucionales</div>
       <InstitutionSwitcher activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} compact />
       <p className="mt-3 text-xs text-slate-500 leading-relaxed">
-        Cada espacio funciona como un entorno separado: pacientes, profesionales, alertas, mensajes, archivos y trazabilidad se filtran por institución para evitar mezclar equipos o casos.
+        Una cuenta puede tener membresías en varias instituciones. Al cambiar de espacio, pacientes, profesionales, programas, alertas y archivos se filtran por permisos reales de Supabase.
       </p>
     </div>
+    <InstitutionsAdminPanel onDataChanged={onDataChanged} />
+    <ProfessionalsAdminPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
+    <PatientLocationCategoriesPanel activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
+    <UserAccessAdminPanel authSession={authSession} activeInstitution={activeInstitution} onDataChanged={onDataChanged} />
     <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
-      <div className="text-slate-300 font-semibold text-sm mb-4">Apariencia</div>
-      <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+      <div className="mb-4">
+        <div className="text-slate-300 font-semibold text-sm">Visualización web/móvil</div>
+        <div className="mt-1 text-xs text-slate-500">El botón flotante se eliminó para no tapar la ficha. Déjalo en Auto salvo que quieras forzar una vista.</div>
+      </div>
+      <ViewModeToggle mode={viewMode} setMode={setViewMode} autoIsMobile={autoIsMobile} embedded />
+    </div>
+    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-slate-100">Modo {themeMode === "light" ? "claro" : "oscuro"}</div>
-          <div className="text-xs text-slate-500">Cambia la interfaz completa sin alterar los datos visibles.</div>
+          <div className="text-slate-300 font-semibold text-sm">Apariencia</div>
+          <div className="mt-1 text-xs text-slate-500">Elige un tema por usuario. Se guarda en Supabase y no altera los datos clínicos.</div>
         </div>
-        <button onClick={() => setThemeMode(themeMode === "light" ? "dark" : "light")} className="rounded-full bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500">
-          {themeMode === "light" ? "Usar oscuro" : "Usar claro"}
-        </button>
+        <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-bold text-slate-200">
+          {APP_THEMES[themeMode]?.icon} {APP_THEMES[themeMode]?.label || "Tema"}
+        </div>
       </div>
-    </div>
-    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
-      <div className="text-slate-300 font-semibold text-sm mb-4">Sesión y permisos demo</div>
-      <SessionSwitcher activeUser={activeUser} setActiveUser={setActiveUser} compact />
-      <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3 text-xs text-slate-500 leading-relaxed">
-        Administrador/a ve todos los pacientes del espacio activo. Cualquier profesional ve solo pacientes donde aparece asignado en el equipo clínico del caso. Esta restricción es demo/frontend; en producción debe ir reforzada en backend/base de datos.
-      </div>
-    </div>
-    <div className="bg-[#131920] rounded-xl border border-slate-800 p-5">
-      <div className="text-slate-300 font-semibold text-sm mb-4">Información del sistema</div>
-      <div className="space-y-2 text-xs">
-        {[
-          ["Versión","1.0.0-MVP"],
-          ["Entorno","Prototipo demo — sin conexión a backend"],
-          ["Stack","React + TypeScript + Tailwind CSS"],
-          ["Persistencia","Datos mock en memoria"],
-          ["Diseñado para","Equipos interdisciplinarios de salud mental"],
-        ].map(([k,v])=>(
-          <div key={k} className="flex justify-between py-2 border-b border-slate-800 last:border-0">
-            <span className="text-slate-500">{k}</span>
-            <span className="text-slate-300">{v}</span>
-          </div>
-        ))}
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {APP_THEME_KEYS.map(key => {
+          const cfg = APP_THEMES[key];
+          const active = key === themeMode;
+          return (
+            <button
+              key={key}
+              onClick={() => setThemeMode(key)}
+              className={`group rounded-2xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-xl ${active ? "border-sky-500 bg-slate-900 shadow-sky-950/40" : "border-slate-800 bg-slate-900/50 hover:border-slate-600"}`}
+              style={{ boxShadow: active ? `0 0 0 1px ${cfg.accent}, 0 0 24px ${cfg.accent}33` : undefined }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-lg">{cfg.icon}</span>
+                {active && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-emerald-300">Activo</span>}
+              </div>
+              <div className="mt-2 text-xs font-black text-slate-100">{cfg.label}</div>
+              <div className="mt-2 flex gap-1">
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.accent }} />
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.accent2 }} />
+                <span className="h-2 flex-1 rounded-full" style={{ background: cfg.card }} />
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
     <div className="bg-red-900/10 border border-red-800/30 rounded-xl p-4">
       <div className="text-red-400 font-semibold text-sm mb-2">⚠ Aviso de privacidad</div>
       <p className="text-xs text-red-300/70 leading-relaxed">
-        Esta plataforma está diseñada para el manejo de datos clínico-operativos sensibles.
-        En producción debe implementarse: autenticación segura, cifrado en tránsito y reposo,
-        control de acceso por roles, auditoría completa y cumplimiento normativo vigente.
-        Los datos contenidos en esta versión son completamente ficticios y de uso demostrativo exclusivamente.
+        Todavía recomendamos usar solo datos ficticios hasta completar revisión de seguridad, respaldos, auditoría e invitaciones institucionales.
       </p>
     </div>
     <Disclaimer />
@@ -3413,6 +6738,15 @@ const AuthGate = ({ children }) => {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    setMessage("");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) setMessage(error.message || "No se pudo iniciar sesión con Google.");
+  };
+
   const handleLogout = async () => {
     if (isSupabaseConfigured) await supabase.auth.signOut();
     setSession(null);
@@ -3441,8 +6775,12 @@ const AuthGate = ({ children }) => {
           <div className="mb-6">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-600 text-lg font-black text-white">CC</div>
             <div className="mt-4 text-2xl font-black text-white">ClinCoord Mental</div>
-            <div className="mt-1 text-sm text-slate-400">Etapa 6.4 · Programas clínicos editables</div>
+            <div className="mt-1 text-sm text-slate-400">Etapa 7 · Usuarios, permisos y acceso institucional</div>
           </div>
+          <button onClick={handleGoogleLogin} className="mb-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-black text-slate-100 hover:bg-slate-800">
+            <span className="text-lg">G</span> Continuar con Google
+          </button>
+          <div className="mb-4 flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-600"><span className="h-px flex-1 bg-slate-800"></span>Email y contraseña<span className="h-px flex-1 bg-slate-800"></span></div>
           <form onSubmit={handleAuth} className="space-y-3">
             <div>
               <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">Email</label>
@@ -3461,7 +6799,7 @@ const AuthGate = ({ children }) => {
             {mode === "signup" ? "Ya tengo cuenta" : "Crear cuenta nueva"}
           </button>
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 p-3 text-xs leading-relaxed text-slate-500">
-            Ingresa con un usuario creado en Supabase Auth. La app leerá su perfil desde <span className="font-mono text-sky-400">public.profiles</span> y los datos visibles quedarán filtrados por RLS.
+            Ingresa con email/contraseña o Google. Si tu cuenta aún no tiene acceso, quedará pendiente hasta que un superadmin o administrador institucional le asigne permisos.
           </div>
         </div>
       </div>
@@ -3472,17 +6810,48 @@ const AuthGate = ({ children }) => {
   return children({ authSession: session, authProfile, onLogout: handleLogout, authLocked: true });
 };
 
+const getStoredThemeForUser = (userId) => {
+  if (typeof window === "undefined") return null;
+  const userTheme = userId ? localStorage.getItem(`clincoord.theme.${userId}`) : null;
+  const globalTheme = localStorage.getItem("clincoord.theme");
+  return (userTheme && APP_THEMES[userTheme]) ? userTheme : ((globalTheme && APP_THEMES[globalTheme]) ? globalTheme : null);
+};
+const persistThemeForUser = (themeKey, userId) => {
+  if (typeof window === "undefined" || !APP_THEMES[themeKey]) return;
+  localStorage.setItem("clincoord.theme", themeKey);
+  if (userId) localStorage.setItem(`clincoord.theme.${userId}`, themeKey);
+};
+
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────
 function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }) {
   const [page, setPage]     = useState("dashboard");
   const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState("desktop");
+  const [viewMode, setViewMode] = useState("auto");
+  const [autoIsMobile, setAutoIsMobile] = useState(() => typeof window !== "undefined" ? window.innerWidth <= 760 : false);
   const [activeInstitution, setActiveInstitutionRaw] = useState(authProfile?.institution || "centro_medico");
   const [activeUser, setActiveUser] = useState(authProfile?.appUserId || "admin");
-  const [themeMode, setThemeMode] = useState("dark");
+  const [themeMode, setThemeModeRaw] = useState(() => getStoredThemeForUser(authSession?.user?.id) || "nocturno");
   const [dataVersion, setDataVersion] = useState(0);
   const [dbState, setDbState] = useState({ loading: Boolean(authLocked && isSupabaseConfigured), error: "", source: authLocked ? "supabase" : "demo" });
   const [runtimeAuthProfile, setRuntimeAuthProfile] = useState(authProfile);
+
+  useEffect(() => {
+    const onResize = () => setAutoIsMobile(window.innerWidth <= 760);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const setThemeMode = (nextTheme) => {
+    const safeTheme = APP_THEMES[nextTheme] ? nextTheme : "nocturno";
+    setThemeModeRaw(safeTheme);
+    try { persistThemeForUser(safeTheme, authSession?.user?.id); } catch {}
+    if (authSession?.user?.id && isSupabaseConfigured) {
+      supabase.from("profiles").update({ theme_preference: safeTheme }).eq("id", authSession.user.id).then(({ error }) => {
+        if (error) console.warn("No se pudo guardar el tema del usuario", error);
+      });
+    }
+  };
 
   useEffect(() => {
     if (!authProfile) return;
@@ -3497,10 +6866,19 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       setDbState({ loading: false, error: "", source: "demo" });
       return;
     }
-    setDbState({ loading: true, error: "", source: "supabase" });
+    // v2.8: refrescos después de guardar no deben desmontar la ficha del paciente ni devolver al dashboard.
+    setDbState(prev => ({ loading: prev.source !== "supabase", error: "", source: "supabase" }));
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
+      // v2.6.3 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
+      const storedTheme = getStoredThemeForUser(authSession?.user?.id);
+      const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
+      if (preferredTheme && APP_THEMES[preferredTheme]) {
+        setThemeModeRaw(preferredTheme);
+        try { persistThemeForUser(preferredTheme, authSession?.user?.id); } catch {}
+      }
       setActiveInstitutionRaw(dbAuthProfile?.institution || "centro_medico");
       setActiveUser(getAppUserIdForWorkspace(dbAuthProfile?.institution || "centro_medico", dbAuthProfile?.appUserId || "admin"));
       setSearch("");
@@ -3534,7 +6912,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         <div className="max-w-lg rounded-3xl border border-red-800 bg-[#131920] p-6 shadow-2xl shadow-black/40">
           <div className="text-xl font-black text-red-400">No se pudieron cargar los datos</div>
           <div className="mt-3 rounded-2xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">{dbState.error}</div>
-          <div className="mt-4 text-sm text-slate-400">Revisa que hayas ejecutado las etapas 5.1, 5.2, 5.3 y 5.4 en Supabase.</div>
+          <div className="mt-4 text-sm text-slate-400">Si acabas de crear la cuenta, puede que aún esté sin acceso asignado. Un superadmin o administrador institucional debe aprobarla en Configuración → Usuarios y permisos.</div>
           {onLogout && <button onClick={onLogout} className="mt-5 rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white hover:bg-sky-500">Cerrar sesión</button>}
         </div>
       </div>
@@ -3549,10 +6927,11 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   };
   ACTIVE_INSTITUTION_ID = activeInstitution;
   ACTIVE_USER_ID = activeUser;
-  const isMobileView = viewMode === "mobile";
+  const isMobileView = viewMode === "auto" ? autoIsMobile : viewMode === "mobile";
+  const themeCfg = APP_THEMES[themeMode] || APP_THEMES.nocturno;
 
   const PAGE_TITLES = {
-    dashboard:"Dashboard", pacientes:"Pacientes", profesionales:"Profesionales",
+    dashboard:"Dashboard", acciones:"Acciones clínicas", pacientes:"Pacientes", profesionales:"Profesionales",
     alertas:"Alertas y Controles", farmacoterapia:"Farmacoterapia / Tratamientos",
     clozapina:"Programa Clozapina", inyectables:"Inyectables de Depósito",
     trazabilidad:"Trazabilidad / Auditoría", estadisticas:"Estadísticas",
@@ -3563,6 +6942,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     <div key={`${activeInstitution}-${page}-${dataVersion}`} className="space-y-5">
       <InstitutionSummary activeInstitution={activeInstitution} />
       {page === "dashboard"      && <Dashboard setPage={setPage} />}
+      {page === "acciones"       && <AccionesClinicasView authSession={authSession} onDataChanged={refreshWorkspaceData} />}
       {page === "pacientes"      && <PacientesView search={search} workspaceKey={activeInstitution} activeInstitution={activeInstitution} authSession={authSession} authProfile={effectiveAuthProfile} onDataChanged={refreshWorkspaceData} />}
       {page === "profesionales"  && <ProfesionalesView />}
       {page === "alertas"        && <AlertasView />}
@@ -3572,16 +6952,27 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
       {page === "trazabilidad"   && <TrazabilidadView />}
       {page === "estadisticas"   && <EstadisticasView />}
       {page === "inbox"          && <InboxView />}
-      {page === "configuracion"  && <ConfiguracionView activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} themeMode={themeMode} setThemeMode={setThemeMode} activeUser={activeUser} setActiveUser={setActiveUser} />}
+      {page === "configuracion"  && <ConfiguracionView activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} themeMode={themeMode} setThemeMode={setThemeMode} viewMode={viewMode} setViewMode={setViewMode} autoIsMobile={autoIsMobile} activeUser={activeUser} setActiveUser={setActiveUser} authSession={authSession} onDataChanged={refreshWorkspaceData} />}
     </div>
   );
 
   return (
-    <div className={`min-h-screen bg-[#080d13] text-slate-100 ${themeMode === "light" ? "light-theme" : "dark-theme"} ${isMobileView ? "mobile-shell" : "flex"}`}
-      style={{ fontFamily:"'DM Sans', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif" }}>
+    <div className={`min-h-screen bg-[#080d13] text-slate-100 theme-${themeMode} ${themeMode === "claro" ? "light-theme" : "dark-theme"} ${isMobileView ? "mobile-shell" : "flex"}`}
+      style={{ fontFamily:"'DM Sans', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif", "--cc-accent": themeCfg.accent, "--cc-accent-2": themeCfg.accent2, "--cc-shell": themeCfg.shell, "--cc-card": themeCfg.card, "--cc-soft": themeCfg.soft, "--cc-text": themeCfg.text }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400&display=swap');
         * { box-sizing: border-box; }
+        body { background: radial-gradient(circle at top left, rgba(14,165,233,.12), transparent 34%), radial-gradient(circle at 80% 10%, rgba(139,92,246,.10), transparent 30%), #080d13; }
+        button, input, select, textarea { font-family: inherit; }
+        .theme-nocturno, .theme-clinico, .theme-bosque, .theme-ambar, .theme-claro, .theme-neon, .theme-coral, .theme-aurora, .theme-titanio, .theme-arcoiris { background: var(--cc-shell) !important; color: var(--cc-text) !important; }
+        .theme-nocturno [class*="bg-[#0d1117]"], .theme-nocturno [class*="bg-[#131920]"], .theme-clinico [class*="bg-[#0d1117]"], .theme-clinico [class*="bg-[#131920]"], .theme-bosque [class*="bg-[#0d1117]"], .theme-bosque [class*="bg-[#131920]"], .theme-ambar [class*="bg-[#0d1117]"], .theme-ambar [class*="bg-[#131920]"], .theme-neon [class*="bg-[#0d1117]"], .theme-neon [class*="bg-[#131920]"], .theme-coral [class*="bg-[#0d1117]"], .theme-coral [class*="bg-[#131920]"], .theme-aurora [class*="bg-[#0d1117]"], .theme-aurora [class*="bg-[#131920]"], .theme-titanio [class*="bg-[#0d1117]"], .theme-titanio [class*="bg-[#131920]"], .theme-arcoiris [class*="bg-[#0d1117]"], .theme-arcoiris [class*="bg-[#131920]"] { background-color: var(--cc-card) !important; }
+        .theme-claro [class*="bg-[#0d1117]"], .theme-claro [class*="bg-[#131920]"], .theme-claro [class*="bg-[#1a2332]"] { background-color: #ffffff !important; }
+        .theme-clinico .bg-sky-600, .theme-bosque .bg-sky-600, .theme-ambar .bg-sky-600, .theme-nocturno .bg-sky-600, .theme-neon .bg-sky-600, .theme-coral .bg-sky-600, .theme-aurora .bg-sky-600, .theme-titanio .bg-sky-600, .theme-arcoiris .bg-sky-600 { background-color: var(--cc-accent) !important; }
+        .theme-clinico .text-sky-400, .theme-bosque .text-sky-400, .theme-ambar .text-sky-400, .theme-nocturno .text-sky-400, .theme-neon .text-sky-400, .theme-coral .text-sky-400, .theme-aurora .text-sky-400, .theme-titanio .text-sky-400, .theme-arcoiris .text-sky-400 { color: var(--cc-accent-2) !important; }
+        .theme-clinico .border-sky-600, .theme-bosque .border-sky-600, .theme-ambar .border-sky-600, .theme-nocturno .border-sky-600, .theme-neon .border-sky-600, .theme-coral .border-sky-600, .theme-aurora .border-sky-600, .theme-titanio .border-sky-600, .theme-arcoiris .border-sky-600 { border-color: var(--cc-accent) !important; }
+        .theme-arcoiris .bg-sky-600 { background-image: linear-gradient(90deg, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #6366f1, #d946ef) !important; }
+        .theme-arcoiris .border-sky-600, .theme-arcoiris .border-sky-800\/60 { border-color: #a78bfa !important; }
+        .theme-arcoiris .text-sky-400 { background: linear-gradient(90deg, #38bdf8, #a78bfa, #fb7185); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: #0d1117; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
@@ -3646,7 +7037,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         .mobile-shell table { min-width: 680px; }
         .mobile-shell [class*="h-[70vh]"] { height: auto !important; min-height: 70vh; }
         .mobile-shell [class*="w-64"] { width: 100% !important; }
-        .mobile-shell [class*="max-w-2xl"] { max-width: 430px !important; }
+        .mobile-shell [class*="max-w-none"] { max-width: 100vw !important; }
         .mobile-shell .fixed.inset-0 { align-items: stretch !important; justify-content: center !important; }
         .mobile-shell .fixed.inset-0 > div { width: min(100vw, 430px) !important; border-left: 0 !important; }
         .mobile-shell main { padding: 0.85rem 0.85rem 6.75rem; }
@@ -3655,9 +7046,6 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
           .mobile-shell .fixed.inset-0 > div { width: 100vw !important; max-width: 100vw !important; }
         }
       `}</style>
-
-      <ThemeToggle themeMode={themeMode} setThemeMode={setThemeMode} />
-      <ViewModeToggle mode={viewMode} setMode={setViewMode} />
 
       {isMobileView ? (
         <>
@@ -3669,7 +7057,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
         </>
       ) : (
         <>
-          <Sidebar active={page} setActive={setPage} />
+          <Sidebar active={page} setActive={setPage} authProfile={effectiveAuthProfile} />
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             <Topbar title={PAGE_TITLES[page]} search={search} setSearch={setSearch} activeInstitution={activeInstitution} setActiveInstitution={setActiveInstitution} activeUser={activeUser} setActiveUser={setActiveUser} authLocked={authLocked} authEmail={authSession?.user?.email} onLogout={onLogout} />
             <main className="flex-1 overflow-y-auto p-6">
