@@ -761,11 +761,19 @@ const loadWorkspaceDataFromSupabase = async (session) => {
   const patientByUuid = new Map();
   const patientRows = patientsDb.map(p => {
     const row = {
-      id: p.clinical_code,
+      id: p.rut || p.clinical_code,
+      clinical_code: p.clinical_code,
+      rut: p.rut || p.clinical_code || "",
       _dbId: p.id,
       institution: mapInstitutionFromDb(p.institution_id, institutionById),
-      initials: p.initials,
-      age: p.age,
+      initials: p.full_name || p.initials,
+      full_name: p.full_name || p.initials || "Sin nombre registrado",
+      age: p.age ?? calculateAgeFromBirthDate(p.birth_date),
+      birth_date: p.birth_date || "",
+      email: p.email || "",
+      phone: p.phone || "",
+      address: p.address || "",
+      comuna: p.comuna || "",
       gender: p.gender || "NR",
       dx_main: p.dx_main || "Sin diagnóstico principal registrado",
       dx_secondary: Array.isArray(p.dx_secondary) ? p.dx_secondary : [],
@@ -782,6 +790,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       consultorio_id: p.consultorio_id || "",
       sector: getPatientLocationLabel(p.sector_id),
       consultorio: getPatientLocationLabel(p.consultorio_id),
+      teamMembers: [],
       doctor: null,
       psychologist: null,
       ot: null,
@@ -795,7 +804,7 @@ const loadWorkspaceDataFromSupabase = async (session) => {
       tasks: 0,
       notes: p.notes || "",
     };
-    patientCodeByUuid.set(p.id, p.clinical_code);
+    patientCodeByUuid.set(p.id, row.id);
     patientByUuid.set(p.id, row);
     return row;
   });
@@ -811,6 +820,17 @@ const loadWorkspaceDataFromSupabase = async (session) => {
 
   patientTeamDb.forEach(team => {
     const patient = patientByUuid.get(team.patient_id);
+    if (patient) {
+      patient.teamMembers = patient.teamMembers || [];
+      patient.teamMembers.push({
+        id: `${team.patient_id}:${team.professional_id}:${team.team_role}`,
+        patient_id: team.patient_id,
+        professional_id: team.professional_id,
+        team_role: team.team_role || "otro",
+        is_primary: Boolean(team.is_primary),
+        created_at: team.created_at || null,
+      });
+    }
     const field = roleToPatientField(team.team_role);
     if (patient && field && (!patient[field] || team.is_primary)) patient[field] = team.professional_id;
   });
@@ -1333,10 +1353,12 @@ const getRiskCfg = (r) => RISK_CONFIG[r] || RISK_CONFIG.no_evaluado;
 const getStatusCfg = (s) => STATUS_CONFIG[s] || STATUS_CONFIG.activo;
 
 const ROLE_LABELS = {
-  psiquiatra_jefe:"Psiquiatra Jefe", psiquiatra:"Psiquiatra",
+  admin:"Administrador/a", psiquiatra_jefe:"Psiquiatra Jefe", psiquiatra:"Psiquiatra",
   medico_general:"Médico General", psicologo:"Psicólogo/a",
-  terapeuta:"Terapeuta Ocupacional", enfermero:"Enfermero/a",
-  trabajador_social:"Trabajador/a Social", admin:"Administrador/a"
+  terapeuta:"Terapeuta Ocupacional", terapeuta_ocupacional:"Terapeuta Ocupacional",
+  enfermero:"Enfermero/a", tens:"TENS", trabajador_social:"Trabajador/a Social",
+  fonoaudiologo:"Fonoaudiólogo/a", nutricionista:"Nutricionista", kinesiologo:"Kinesiólogo/a",
+  solo_lectura:"Solo lectura", otro:"Otro"
 };
 
 // ─── PEQUEÑOS COMPONENTES ─────────────────────────────────────────────────
@@ -1667,6 +1689,25 @@ const calculateNextDate = (date, days) => {
   if (!d || !n) return "";
   return addDays(d, n);
 };
+
+const normalizeRutValue = (value) => String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+const makeInitialsFromName = (name) => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "S/N";
+  if (parts.length === 1) return parts[0].slice(0, 3).toUpperCase();
+  return parts.slice(0, 3).map(x => x[0]).join(".").toUpperCase() + ".";
+};
+const calculateAgeFromBirthDate = (birthDate) => {
+  const d = emptyToNull(birthDate);
+  if (!d) return null;
+  const date = new Date(`${d}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - date.getFullYear();
+  const m = today.getMonth() - date.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < date.getDate())) age -= 1;
+  return age >= 0 && age <= 130 ? age : null;
+};
 const CLINICAL_PROGRAM_STATUS_OPTIONS = ["vigente", "proximo", "atrasado", "suspendido"];
 const inferProgramStatus = (nextDate) => {
   const d = daysUntil(nextDate);
@@ -1686,6 +1727,24 @@ const TEAM_FIELD_CONFIG = [
   { field:"nurse",        label:"Enfermería",           teamRole:"enfermero",               allowed:["enfermero"] },
   { field:"social",       label:"Trabajo social",       teamRole:"trabajador_social",       allowed:["trabajador_social"] },
 ];
+
+const TEAM_ROLE_OPTIONS = [
+  ["psiquiatra", "Psiquiatra / médico"],
+  ["psicologo", "Psicólogo/a"],
+  ["terapeuta_ocupacional", "Terapia ocupacional"],
+  ["enfermero", "Enfermería"],
+  ["tens", "TENS"],
+  ["trabajador_social", "Trabajo social"],
+  ["fonoaudiologo", "Fonoaudiología"],
+  ["nutricionista", "Nutrición"],
+  ["kinesiologo", "Kinesiología"],
+  ["otro", "Otro integrante"],
+];
+const TEAM_ROLE_LABELS = Object.fromEntries(TEAM_ROLE_OPTIONS);
+const getTeamRoleLabel = (role) => TEAM_ROLE_LABELS[role] || ROLE_LABELS[role] || role || "Equipo";
+const getAssignableProfessionals = () => RAW_PROFESSIONALS
+  .filter(p => p.institution === ACTIVE_INSTITUTION_ID && p.is_active !== false && p.role !== "solo_lectura")
+  .sort((a, b) => a.name.localeCompare(b.name));
 
 const getTeamOptionsForField = (field) => {
   const cfg = TEAM_FIELD_CONFIG.find(x => x.field === field);
@@ -1756,11 +1815,22 @@ const insertTraceEvent = async ({ institutionId, patientId, authSession, action,
 };
 
 const buildPatientPayload = (form, institutionId, authSession, includeCreatedBy = false) => {
+  const rut = normalizeRutValue(form.rut || form.clinical_code);
+  const fullName = String(form.full_name || form.initials || "").trim();
+  const birthDate = emptyToNull(form.birth_date);
+  const calculatedAge = calculateAgeFromBirthDate(birthDate);
   const payload = {
     institution_id: institutionId,
-    clinical_code: String(form.clinical_code || "").trim().toUpperCase(),
-    initials: String(form.initials || "").trim().toUpperCase(),
-    age: parseOptionalInt(form.age),
+    clinical_code: rut,
+    rut,
+    initials: makeInitialsFromName(fullName),
+    full_name: fullName,
+    age: parseOptionalInt(form.age) ?? calculatedAge,
+    birth_date: birthDate,
+    email: emptyToNull(form.email),
+    phone: emptyToNull(form.phone),
+    address: emptyToNull(form.address),
+    comuna: emptyToNull(form.comuna),
     gender: form.gender || "NR",
     dx_main: emptyToNull(form.dx_main),
     dx_secondary: splitSecondaryDx(form.dx_secondary),
@@ -1803,6 +1873,105 @@ const buildTeamRowsForRpc = (team) => TEAM_FIELD_CONFIG
     is_primary: item.cfg.field === "doctor",
   }));
 
+const savePatientTeamMemberToSupabase = async ({ patient, professionalId, teamRole, isPrimary, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  if (!professionalId) throw new Error("Selecciona un profesional.");
+  if (!teamRole) throw new Error("Selecciona un rol dentro del equipo.");
+
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  if (isPrimary) {
+    await supabase
+      .from("patient_team")
+      .update({ is_primary: false })
+      .eq("patient_id", patient._dbId)
+      .eq("team_role", teamRole);
+  }
+
+  const { error } = await supabase.from("patient_team").upsert({
+    patient_id: patient._dbId,
+    professional_id: professionalId,
+    team_role: teamRole,
+    is_primary: Boolean(isPrimary),
+  }, { onConflict: "patient_id,professional_id,team_role" });
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Equipo tratante actualizado",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: null,
+    nextValue: getProf(professionalId)?.name || professionalId,
+    eventType: "edicion",
+  });
+};
+
+const removePatientTeamMemberFromSupabase = async ({ patient, professionalId, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  const { error } = await supabase
+    .from("patient_team")
+    .delete()
+    .eq("patient_id", patient._dbId)
+    .eq("professional_id", professionalId)
+    .eq("team_role", teamRole);
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Integrante removido del equipo tratante",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: getProf(professionalId)?.name || professionalId,
+    nextValue: null,
+    eventType: "edicion",
+  });
+};
+
+const setPrimaryPatientTeamMemberInSupabase = async ({ patient, professionalId, teamRole, authSession }) => {
+  if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
+  if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
+  if (!patient?._dbId) throw new Error("Este paciente no tiene identificador de base de datos.");
+  const dbProfile = await getCurrentDbProfile(authSession, ACTIVE_INSTITUTION_ID);
+  if (dbProfile.role !== "admin") throw new Error("Solo administradores institucionales pueden modificar el equipo tratante.");
+
+  const { error: clearError } = await supabase
+    .from("patient_team")
+    .update({ is_primary: false })
+    .eq("patient_id", patient._dbId)
+    .eq("team_role", teamRole);
+  if (clearError) throw clearError;
+
+  const { error } = await supabase
+    .from("patient_team")
+    .update({ is_primary: true })
+    .eq("patient_id", patient._dbId)
+    .eq("professional_id", professionalId)
+    .eq("team_role", teamRole);
+  if (error) throw error;
+
+  await insertTraceEvent({
+    institutionId: dbProfile.institution_id,
+    patientId: patient._dbId,
+    authSession,
+    action: "Profesional principal actualizado",
+    field: getTeamRoleLabel(teamRole),
+    previousValue: null,
+    nextValue: getProf(professionalId)?.name || professionalId,
+    eventType: "edicion",
+  });
+};
+
 const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitution, authSession, authProfile }) => {
   if (!isSupabaseConfigured) throw new Error("Esta acción requiere Supabase configurado.");
   if (!authSession?.user?.id) throw new Error("No hay sesión activa.");
@@ -1814,20 +1983,26 @@ const savePatientToSupabase = async ({ mode, patient, form, team, activeInstitut
   const institutionId = dbProfile.institution_id;
 
   const payload = buildPatientPayload(form, institutionId, authSession, mode === "create");
-  if (!payload.clinical_code) throw new Error("El código clínico es obligatorio.");
-  if (!payload.initials) throw new Error("Las iniciales son obligatorias.");
+  if (!payload.rut) throw new Error("El RUT es obligatorio.");
+  if (!payload.full_name) throw new Error("El nombre completo es obligatorio.");
 
   if (mode === "create") {
-    if (!isAdmin) throw new Error("Solo un administrador de la institución puede crear pacientes nuevos. Entra con admin@clincoord.demo o h-admin@clincoord.demo.");
 
     // v1.6: la creación se hace por RPC multi-institución.
     // La función recibe explícitamente la institución activa y Supabase valida
     // que el usuario sea admin de esa institución mediante memberships.
-    const { data, error } = await supabase.rpc("clincoord_create_patient_v2", {
+    const { data, error } = await supabase.rpc("clincoord_create_patient_v3", {
       p_institution_id: institutionId,
       p_clinical_code: payload.clinical_code,
+      p_rut: payload.rut,
+      p_full_name: payload.full_name,
       p_initials: payload.initials,
       p_age: payload.age,
+      p_birth_date: payload.birth_date,
+      p_email: payload.email,
+      p_phone: payload.phone,
+      p_address: payload.address,
+      p_comuna: payload.comuna,
       p_gender: payload.gender,
       p_dx_main: payload.dx_main,
       p_dx_secondary: payload.dx_secondary,
@@ -1923,8 +2098,15 @@ const patientSafetyActionInSupabase = async ({ action, patient, reason, authSess
 
 const defaultPatientForm = () => ({
   clinical_code:"",
+  rut:"",
   initials:"",
+  full_name:"",
+  birth_date:"",
   age:"",
+  email:"",
+  phone:"",
+  address:"",
+  comuna:"",
   gender:"NR",
   dx_main:"",
   dx_secondary:"",
@@ -1946,9 +2128,16 @@ const defaultPatientForm = () => ({
 });
 
 const patientToForm = (patient) => ({
-  clinical_code: patient?.id || "",
+  clinical_code: patient?.clinical_code || patient?.rut || patient?.id || "",
+  rut: patient?.rut || patient?.id || "",
   initials: patient?.initials || "",
+  full_name: patient?.full_name || patient?.initials || "",
+  birth_date: patient?.birth_date || "",
   age: patient?.age ?? "",
+  email: patient?.email || "",
+  phone: patient?.phone || "",
+  address: patient?.address || "",
+  comuna: patient?.comuna || "",
   gender: patient?.gender || "NR",
   dx_main: patient?.dx_main || "",
   dx_secondary: Array.isArray(patient?.dx_secondary) ? patient.dx_secondary.join("; ") : "",
@@ -2013,9 +2202,10 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
   const [team, setTeam] = useState(() => mode === "edit" ? patientToTeam(patient) : patientToTeam(null));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const membership = getMembershipForWorkspace(ACTIVE_INSTITUTION_ID);
+  const isAdmin = (membership?.role === "admin" || ACTIVE_USER_ID === "admin");
   const canManageTeam = isAdmin;
-  const canCreate = mode !== "create" || isAdmin;
+  const canCreate = mode !== "create" || Boolean(membership || ACTIVE_USER_ID === "admin");
   const updateForm = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
   const updateTeam = (key, value) => setTeam(prev => ({ ...prev, [key]: value }));
 
@@ -2040,9 +2230,9 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
       <form onSubmit={submit} className="my-4 w-full max-w-4xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/50" onClick={e => e.stopPropagation()}>
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-800 bg-[#131920]/95 p-5 backdrop-blur">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">Etapa 6.1 · Pacientes reales</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.5 · Identificación y contacto</div>
             <h2 className="mt-1 text-xl font-black text-white">{mode === "create" ? "Nuevo paciente" : `Editar ${patient?.id}`}</h2>
-            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. El equipo tratante controla qué profesionales podrán ver el caso.</p>
+            <p className="mt-1 text-xs text-slate-400">Guarda en Supabase. Cualquier profesional aprobado puede crear pacientes; el RUT evita duplicados y el equipo tratante controla accesos posteriores.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-bold text-slate-300 hover:bg-slate-800">✕</button>
         </div>
@@ -2050,7 +2240,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
         <div className="space-y-5 p-5">
           {!canCreate && (
             <div className="rounded-2xl border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-200">
-              En esta versión, por seguridad, solo el administrador puede crear pacientes nuevos. Los profesionales pueden editar casos que ya tienen asignados.
+              Tu usuario no tiene una membresía activa en esta institución. Los profesionales aprobados pueden crear pacientes; el equipo tratante lo puede ajustar un administrador.
             </div>
           )}
           {error && <div className="rounded-2xl border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
@@ -2058,11 +2248,18 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
             <div className="mb-3 text-sm font-black text-slate-100">Datos básicos</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div><FieldLabel>Código clínico</FieldLabel><TextInput required value={form.clinical_code} onChange={v => updateForm("clinical_code", v)} placeholder="CMP-005" /></div>
-              <div><FieldLabel>Iniciales</FieldLabel><TextInput required value={form.initials} onChange={v => updateForm("initials", v)} placeholder="A.B.C." /></div>
+              <div><FieldLabel>RUT</FieldLabel><TextInput required value={form.rut} onChange={v => { updateForm("rut", v); updateForm("clinical_code", v); }} placeholder="12.345.678-9" /></div>
+              <div className="md:col-span-2"><FieldLabel>Nombre completo</FieldLabel><TextInput required value={form.full_name} onChange={v => updateForm("full_name", v)} placeholder="Nombre y apellidos" /></div>
+              <div><FieldLabel>Fecha nacimiento</FieldLabel><TextInput type="date" value={form.birth_date} onChange={v => { updateForm("birth_date", v); if (!form.age) updateForm("age", calculateAgeFromBirthDate(v) ?? ""); }} /></div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-5">
               <div><FieldLabel>Edad</FieldLabel><TextInput type="number" value={form.age} onChange={v => updateForm("age", v)} /></div>
               <div><FieldLabel>Género</FieldLabel><SelectInput value={form.gender} onChange={v => updateForm("gender", v)}><option value="NR">No registrado</option><option value="F">F</option><option value="M">M</option><option value="X">X</option></SelectInput></div>
+              <div><FieldLabel>Email</FieldLabel><TextInput type="email" value={form.email} onChange={v => updateForm("email", v)} placeholder="correo@dominio.cl" /></div>
+              <div><FieldLabel>Fono</FieldLabel><TextInput value={form.phone} onChange={v => updateForm("phone", v)} placeholder="+56 9 ..." /></div>
+              <div><FieldLabel>Comuna</FieldLabel><TextInput value={form.comuna} onChange={v => updateForm("comuna", v)} placeholder="Comuna" /></div>
             </div>
+            <div className="mt-3"><FieldLabel>Dirección</FieldLabel><TextInput value={form.address} onChange={v => updateForm("address", v)} placeholder="Dirección de contacto" /></div>
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div><FieldLabel>Diagnóstico principal</FieldLabel><TextAreaInput rows={2} value={form.dx_main} onChange={v => updateForm("dx_main", v)} placeholder="Diagnóstico de trabajo" /></div>
               <div><FieldLabel>Diagnósticos secundarios</FieldLabel><TextAreaInput rows={2} value={form.dx_secondary} onChange={v => updateForm("dx_secondary", v)} placeholder="Separar con punto y coma" /></div>
@@ -2114,7 +2311,7 @@ const PatientFormModal = ({ mode, patient, authSession, authProfile, activeInsti
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-[#131920] p-4">
-            <div className="mb-3 text-sm font-black text-slate-100">Contexto clínico-funcional</div>
+            <div className="mb-3 text-sm font-black text-slate-100">Contexto clínico-funcional y apoyo</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div><FieldLabel>Sustancias</FieldLabel><TextInput value={form.substances} onChange={v => updateForm("substances", v)} /></div>
               <div><FieldLabel>Adherencia</FieldLabel><TextInput value={form.adherence} onChange={v => updateForm("adherence", v)} /></div>
@@ -2598,7 +2795,7 @@ const patientSearchHaystack = (p) => {
   const cloz = CLOZAPINE_TRACKING[p.id] ? "clozapina hemograma programa" : "";
   const lai = DEPOT_TRACKING[p.id] ? "inyectable deposito lai depot" : "";
   return normalizeText([
-    p.id, p.initials, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
+    p.id, p.rut, p.full_name, p.initials, p.birth_date, p.email, p.phone, p.address, p.comuna, p.age, p.gender, p.dx_main, ...(p.dx_secondary || []), p.risk, p.status,
     p.suicide_risk, p.hetero_risk, p.social_risk, p.substances, p.adherence, p.functional,
     p.support, p.notes, p.sector, p.consultorio, noteText, p.next_control, teamNames, alerts, meds, cloz, lai,
     ...getPatientDxTags(p).map(t => t.label),
@@ -2627,8 +2824,8 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
         className="rounded-2xl border bg-[#131920] px-3 py-2 cursor-pointer hover:bg-[#1a2332] transition-all">
         <div className="flex items-center gap-3">
           <div className="w-20 shrink-0">
-            <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
-            <div className="text-sm font-black text-white">{patient.initials}</div>
+            <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+            <div className="text-sm font-black text-white truncate">{patient.full_name || patient.initials}</div>
           </div>
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex flex-wrap gap-1">
@@ -2656,9 +2853,10 @@ const PatientCard = ({ patient, onClick, compact = false }) => {
       <div className="relative">
         <div className="flex items-start justify-between mb-2.5">
           <div>
-            <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
-            <div className="text-white font-bold text-base leading-tight">{patient.initials}</div>
-            <div className="text-slate-400 text-xs">{patient.age} años · {patient.gender === "F" ? "F" : patient.gender === "M" ? "M" : "NR"}</div>
+            <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+            <div className="text-white font-bold text-base leading-tight">{patient.full_name || patient.initials}</div>
+            <div className="text-slate-400 text-xs">{patient.age ?? "—"} años · {patient.gender === "F" ? "F" : patient.gender === "M" ? "M" : "NR"}</div>
+            {(patient.phone || patient.comuna) && <div className="mt-0.5 text-[10px] text-slate-500">☎ {patient.phone || "sin fono"}{patient.comuna ? ` · ${patient.comuna}` : ""}</div>}
             <div className="mt-1 flex flex-wrap gap-1">
               <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
               <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
@@ -3058,7 +3256,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.3 · Edición clínica y ubicación</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.5 · Equipo tratante avanzado</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3117,6 +3315,146 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
   );
 };
 
+const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
+  const isAdmin = (getMembershipForWorkspace(ACTIVE_INSTITUTION_ID)?.role === "admin" || ACTIVE_USER_ID === "admin");
+  const [professionalId, setProfessionalId] = useState("");
+  const [teamRole, setTeamRole] = useState("psiquiatra");
+  const [isPrimary, setIsPrimary] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const teamMembers = (patient.teamMembers || []).slice().sort((a, b) => {
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
+    return getTeamRoleLabel(a.team_role).localeCompare(getTeamRoleLabel(b.team_role));
+  });
+  const assignedKeys = new Set(teamMembers.map(m => `${m.professional_id}:${m.team_role}`));
+  const professionalOptions = getAssignableProfessionals();
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await savePatientTeamMemberToSupabase({ patient, professionalId, teamRole, isPrimary, authSession });
+      setProfessionalId("");
+      setIsPrimary(false);
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo actualizar el equipo tratante.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeMember = async (member) => {
+    if (!window.confirm("¿Quitar este integrante del equipo tratante?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await removePatientTeamMemberFromSupabase({ patient, professionalId: member.professional_id, teamRole: member.team_role, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo quitar el integrante.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setPrimary = async (member) => {
+    setSaving(true);
+    setError("");
+    try {
+      await setPrimaryPatientTeamMemberInSupabase({ patient, professionalId: member.professional_id, teamRole: member.team_role, authSession });
+      await onDataChanged?.();
+    } catch (err) {
+      console.error(err);
+      setError(err?.message || "No se pudo marcar como principal.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.5 · Equipo tratante avanzado</div>
+            <h3 className="mt-1 text-base font-black text-white">Equipo tratante del caso</h3>
+            <p className="mt-1 text-xs text-slate-500">Estos integrantes determinan visibilidad del caso y responsabilidad clínica dentro de la institución activa.</p>
+          </div>
+          {!isAdmin && <span className="rounded-full border border-amber-700 bg-amber-950/30 px-3 py-1 text-[10px] font-black text-amber-300">Solo lectura</span>}
+        </div>
+
+        {error && <div className="mt-3 rounded-2xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+
+        <div className="mt-4 space-y-2">
+          {teamMembers.length === 0 && <div className="rounded-2xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">Sin equipo tratante asignado.</div>}
+          {teamMembers.map(member => {
+            const prof = getProf(member.professional_id);
+            return (
+              <div key={`${member.professional_id}:${member.team_role}`} className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900/40 p-3">
+                <ProfAvatar id={member.professional_id} size="lg" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-sm font-black text-slate-100">{prof?.name || "Profesional no encontrado"}</div>
+                    {member.is_primary && <span className="rounded-full border border-sky-500 bg-sky-500/10 px-2 py-0.5 text-[10px] font-black text-sky-300">Principal</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-500">{getTeamRoleLabel(member.team_role)} · {prof?.specialty || ROLE_LABELS[prof?.role] || "Equipo clínico"}</div>
+                </div>
+                {isAdmin && (
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    {!member.is_primary && (
+                      <button disabled={saving} onClick={() => setPrimary(member)} className="rounded-full border border-sky-700 px-2.5 py-1 text-[10px] font-black text-sky-300 hover:bg-sky-900/30 disabled:opacity-50">Marcar principal</button>
+                    )}
+                    <button disabled={saving} onClick={() => removeMember(member)} className="rounded-full border border-red-800 px-2.5 py-1 text-[10px] font-black text-red-300 hover:bg-red-950/30 disabled:opacity-50">Quitar</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {isAdmin && (
+        <form onSubmit={submit} className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
+          <div className="mb-3 text-sm font-black text-slate-100">Agregar integrante</div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <FieldLabel>Profesional</FieldLabel>
+              <SelectInput value={professionalId} onChange={setProfessionalId}>
+                <option value="">Seleccionar</option>
+                {professionalOptions.map(prof => (
+                  <option key={prof.id} value={prof.id} disabled={assignedKeys.has(`${prof.id}:${teamRole}`)}>
+                    {prof.name} · {ROLE_LABELS[prof.role] || prof.role}
+                  </option>
+                ))}
+              </SelectInput>
+            </div>
+            <div>
+              <FieldLabel>Rol en este caso</FieldLabel>
+              <SelectInput value={teamRole} onChange={setTeamRole}>
+                {TEAM_ROLE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </SelectInput>
+            </div>
+            <div className="flex items-end gap-2">
+              <label className="flex min-h-[38px] flex-1 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/50 px-3 text-xs font-bold text-slate-300">
+                <input type="checkbox" checked={isPrimary} onChange={e => setIsPrimary(e.target.checked)} />
+                Principal para ese rol
+              </label>
+              <button disabled={saving || !professionalId || !teamRole} className="min-h-[38px] rounded-xl bg-sky-600 px-4 text-xs font-black text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
+                {saving ? "Guardando…" : "Agregar"}
+              </button>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] text-slate-500">Puedes agregar más de un profesional por rol. El marcado como principal se usa para vista rápida y responsabilidad preferente.</p>
+        </form>
+      )}
+    </div>
+  );
+};
+
 // ─── PATIENT DETAIL ────────────────────────────────────────────────────────
 const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, onDataChanged }) => {
   const [tab, setTab] = useState("resumen");
@@ -3149,9 +3487,10 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
         <div className={`border-b ${rc.border} border-opacity-50 p-5 bg-[#131920]`}>
           <div className="flex items-start justify-between mb-3">
             <div>
-              <div className="text-[10px] text-slate-500 font-mono">{patient.id}</div>
-              <div className="text-white text-xl font-bold">{patient.initials}</div>
-              <div className="text-slate-400 text-sm">{patient.age} años · {patient.gender === "F" ? "Femenino" : patient.gender === "M" ? "Masculino" : "No registrado"}</div>
+              <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
+              <div className="text-white text-xl font-bold">{patient.full_name || patient.initials}</div>
+              <div className="text-slate-400 text-sm">{patient.age ?? "—"} años · {patient.gender === "F" ? "Femenino" : patient.gender === "M" ? "Masculino" : "No registrado"}</div>
+              {(patient.email || patient.phone || patient.comuna) && <div className="mt-1 text-xs text-slate-500">{patient.email || "sin email"} · {patient.phone || "sin fono"}{patient.comuna ? ` · ${patient.comuna}` : ""}</div>}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <LocationChip kind="sector" id={patient.sector_id} fallback={patient.sector} />
                 <LocationChip kind="consultorio" id={patient.consultorio_id} fallback={patient.consultorio} />
@@ -3211,7 +3550,10 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
                   ["Riesgo suicida", patient.suicide_risk, "riesgo"],
                   ["Riesgo heteroagresivo", patient.hetero_risk, "riesgo"],
                   ["Riesgo social", patient.social_risk, "riesgo"],
-                  ["Consumo sustancias", patient.substances, "info"],
+                  ["Email", patient.email || "Sin email", "info"],
+                  ["Fono", patient.phone || "Sin fono", "info"],
+                  ["Dirección", patient.address || "Sin dirección", "info"],
+                  ["Comuna", patient.comuna || "Sin comuna", "info"],
                   ["Adherencia estimada", patient.adherence, "info"],
                   ["Estado funcional", patient.functional, "info"],
                   ["Red de apoyo", patient.support, "info"],
@@ -3332,30 +3674,11 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
             </div>
           )}
           {tab === "equipo" && (
-            <div className="space-y-2">
-              {[
-                ["Médico psiquiatra", patient.doctor],
-                ["Psicólogo/a", patient.psychologist],
-                ["Terapeuta Ocupacional", patient.ot],
-                ["Enfermería", patient.nurse],
-                ["Trabajo Social", patient.social],
-              ].map(([role, pid]) => {
-                const prof = getProf(pid);
-                return (
-                  <div key={role} className="bg-[#131920] rounded-lg p-3 border border-slate-700 flex items-center justify-between">
-                    <span className="text-xs text-slate-400">{role}</span>
-                    {prof ? (
-                      <div className="flex items-center gap-2">
-                        <ProfAvatar id={pid} />
-                        <span className="text-sm text-slate-200 font-medium">{prof.name}</span>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-orange-400 bg-orange-900/20 border border-orange-800 px-2 py-0.5 rounded">Sin asignar</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <AdvancedTeamPanel
+              patient={patient}
+              authSession={authSession}
+              onDataChanged={onDataChanged}
+            />
           )}
           {tab === "archivos" && (
             <PatientFilesPanel
@@ -3572,7 +3895,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
     return matchSearch && matchRisk && matchStatus && quick.fn(p);
   }), [search, riskFilter, statusFilter, quickFilter, workspaceKey]);
 
-  const resultLabel = search ? `Búsqueda: “${search}”` : "Búsqueda avanzada disponible por diagnóstico, profesional, alerta, clozapina, LAI, estado o código.";
+  const resultLabel = search ? `Búsqueda: “${search}”` : "Búsqueda avanzada por RUT, nombre, contacto, diagnóstico, profesional, alerta, clozapina, LAI o estado.";
 
   return (
     <div>
@@ -3607,9 +3930,9 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
           {USING_SUPABASE_DATA && (
             <button
               onClick={openCreate}
-              disabled={!isAdmin}
-              title={isAdmin ? "Crear paciente en Supabase" : "Solo administrador puede crear pacientes en esta versión"}
-              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={false}
+              title="Crear paciente en Supabase"
+              className="rounded-full border border-sky-600 bg-sky-600/20 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-600/30"
             >
               + Nuevo paciente
             </button>
@@ -3660,7 +3983,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
         <div className="text-xs text-slate-500">{filtered.length} paciente{filtered.length!==1?"s":""} · {PATIENTS.length} en esta institución</div>
         {USING_SUPABASE_DATA && (
           <div className="text-[10px] text-slate-500">
-            {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes editar pacientes asignados. La reasignación de equipo queda para admin."}
+            {isAdmin ? "Puedes crear, editar y reasignar equipo." : "Puedes crear pacientes y editar casos asignados. La reasignación de equipo queda para admin."}
           </div>
         )}
       </div>
@@ -3678,7 +4001,7 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wider">
-                {["ID","Paciente","Edad","Diagnóstico","Familias dx","Riesgo","Estado","Próx. control","Responsable"].map(h => (
+                {["RUT","Nombre","Edad","Diagnóstico","Familias dx","Riesgo","Estado","Próx. control","Responsable"].map(h => (
                   <th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>
                 ))}
               </tr>
@@ -3687,8 +4010,8 @@ const PacientesView = ({ search, workspaceKey, authSession, authProfile, onDataC
               {filtered.map((p, i) => (
                 <tr key={p.id} onClick={() => setSelected(p)}
                   className={`border-b border-slate-800/50 hover:bg-[#1a2332] cursor-pointer transition-colors ${i%2===0?"":"bg-slate-900/20"}`}>
-                  <td className="px-4 py-3 font-mono text-slate-500">{p.id}</td>
-                  <td className="px-4 py-3 text-slate-200 font-semibold">{p.initials}</td>
+                  <td className="px-4 py-3 font-mono text-slate-500">{p.rut || p.id}</td>
+                  <td className="px-4 py-3 text-slate-200 font-semibold">{p.full_name || p.initials}</td>
                   <td className="px-4 py-3 text-slate-400">{p.age}</td>
                   <td className="px-4 py-3 text-slate-300 max-w-[220px] truncate">{p.dx_main}</td>
                   <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{getPatientDxTags(p).slice(0,3).map(t => <span key={t.key} className="rounded-full border px-1.5 py-0.5 text-[9px] font-black" style={{ color:t.color, borderColor:t.color }}>{t.label}</span>)}</div></td>
@@ -5461,6 +5784,18 @@ const AuthGate = ({ children }) => {
   return children({ authSession: session, authProfile, onLogout: handleLogout, authLocked: true });
 };
 
+const getStoredThemeForUser = (userId) => {
+  if (typeof window === "undefined") return null;
+  const userTheme = userId ? localStorage.getItem(`clincoord.theme.${userId}`) : null;
+  const globalTheme = localStorage.getItem("clincoord.theme");
+  return (userTheme && APP_THEMES[userTheme]) ? userTheme : ((globalTheme && APP_THEMES[globalTheme]) ? globalTheme : null);
+};
+const persistThemeForUser = (themeKey, userId) => {
+  if (typeof window === "undefined" || !APP_THEMES[themeKey]) return;
+  localStorage.setItem("clincoord.theme", themeKey);
+  if (userId) localStorage.setItem(`clincoord.theme.${userId}`, themeKey);
+};
+
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────
 function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }) {
   const [page, setPage]     = useState("dashboard");
@@ -5469,10 +5804,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   const [autoIsMobile, setAutoIsMobile] = useState(() => typeof window !== "undefined" ? window.innerWidth <= 760 : false);
   const [activeInstitution, setActiveInstitutionRaw] = useState(authProfile?.institution || "centro_medico");
   const [activeUser, setActiveUser] = useState(authProfile?.appUserId || "admin");
-  const [themeMode, setThemeModeRaw] = useState(() => {
-    if (typeof window === "undefined") return "nocturno";
-    return localStorage.getItem("clincoord.theme") || "nocturno";
-  });
+  const [themeMode, setThemeModeRaw] = useState(() => getStoredThemeForUser(authSession?.user?.id) || "nocturno");
   const [dataVersion, setDataVersion] = useState(0);
   const [dbState, setDbState] = useState({ loading: Boolean(authLocked && isSupabaseConfigured), error: "", source: authLocked ? "supabase" : "demo" });
   const [runtimeAuthProfile, setRuntimeAuthProfile] = useState(authProfile);
@@ -5487,7 +5819,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
   const setThemeMode = (nextTheme) => {
     const safeTheme = APP_THEMES[nextTheme] ? nextTheme : "nocturno";
     setThemeModeRaw(safeTheme);
-    try { localStorage.setItem("clincoord.theme", safeTheme); } catch {}
+    try { persistThemeForUser(safeTheme, authSession?.user?.id); } catch {}
     if (authSession?.user?.id && isSupabaseConfigured) {
       supabase.from("profiles").update({ theme_preference: safeTheme }).eq("id", authSession.user.id).then(({ error }) => {
         if (error) console.warn("No se pudo guardar el tema del usuario", error);
@@ -5512,7 +5844,14 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
-      if (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference]) setThemeModeRaw(dbAuthProfile.themePreference);
+      // v2.5 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
+      const storedTheme = getStoredThemeForUser(authSession?.user?.id);
+      const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
+      if (preferredTheme && APP_THEMES[preferredTheme]) {
+        setThemeModeRaw(preferredTheme);
+        try { persistThemeForUser(preferredTheme, authSession?.user?.id); } catch {}
+      }
       setActiveInstitutionRaw(dbAuthProfile?.institution || "centro_medico");
       setActiveUser(getAppUserIdForWorkspace(dbAuthProfile?.institution || "centro_medico", dbAuthProfile?.appUserId || "admin"));
       setSearch("");
