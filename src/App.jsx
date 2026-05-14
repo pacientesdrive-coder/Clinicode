@@ -530,21 +530,35 @@ const ADMIN_USER = {
   color: "bg-slate-600",
 };
 const CARE_TEAM_FIELDS = ["doctor", "psychologist", "ot", "nurse", "social"];
+const getLivePatient = (patient) => RAW_PATIENTS.find(p => p?.id === patient?.id || (p?._dbId && p._dbId === patient?._dbId)) || patient;
+const getPatientTeamRows = (patient) => {
+  const live = getLivePatient(patient);
+  const rows = [...(live?.teamMembers || []), ...(patient?.teamMembers || [])];
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = `${row?.professional_id || ""}:${row?.team_role || ""}`;
+    if (!row?.professional_id || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 const getPatientTeamIds = (patient) => {
-  const compact = CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
-  const expanded = (patient?.teamMembers || []).map(m => m.professional_id).filter(Boolean);
+  const live = getLivePatient(patient);
+  const compact = CARE_TEAM_FIELDS.flatMap(field => [live?.[field], patient?.[field]]).filter(Boolean);
+  const expanded = getPatientTeamRows(patient).map(m => m.professional_id).filter(Boolean);
   return Array.from(new Set([...compact, ...expanded]));
 };
 
-// v2.6.2: para las tarjetas se muestran todos los tratantes reales del caso,
-// no solo el profesional principal. Así, si PD era principal y SA toma
-// tratancia después, ambos aparecen en la tarjeta sin esperar reasignación.
-const getPatientTeamDisplayIds = (patient, limit = 6) => {
-  const expandedRows = [...(patient?.teamMembers || [])]
+// v2.6.3: las tarjetas leen el paciente "vivo" desde RAW_PATIENTS y no solo
+// el objeto stale que quedó al abrir el modal. Así, si alguien toma tratancia,
+// las tarjetas muestran inmediatamente PD + SA u otros tratantes reales.
+const getPatientTeamDisplayIds = (patient, limit = 8) => {
+  const live = getLivePatient(patient);
+  const expandedRows = getPatientTeamRows(patient)
     .filter(m => m?.professional_id && getProf(m.professional_id))
     .sort((a, b) => Number(Boolean(b.is_primary)) - Number(Boolean(a.is_primary)) || String(a.team_role || '').localeCompare(String(b.team_role || '')));
   const expanded = expandedRows.map(m => m.professional_id);
-  const compact = CARE_TEAM_FIELDS.map(field => patient?.[field]).filter(Boolean);
+  const compact = CARE_TEAM_FIELDS.flatMap(field => [live?.[field], patient?.[field]]).filter(Boolean);
   return Array.from(new Set([...expanded, ...compact])).slice(0, limit);
 };
 const getCurrentUser = () => ACTIVE_USER_ID === "admin" ? ADMIN_USER : RAW_PROFESSIONALS.find(p => p.id === ACTIVE_USER_ID) || ADMIN_USER;
@@ -1510,7 +1524,7 @@ const Topbar = ({ title, search, setSearch, activeInstitution, setActiveInstitut
       </div>
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
-      <div className="text-[10px] text-slate-600 font-mono">v2.6.2</div>
+      <div className="text-[10px] text-slate-600 font-mono">v2.6.3</div>
     </div>
   </header>
 );
@@ -3338,7 +3352,7 @@ const PatientSafetyActionModal = ({ action, patient, authSession, onClose, onSav
     <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm" onClick={() => onClose?.(false)}>
       <form onSubmit={submit} className="my-8 w-full max-w-xl rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/60" onClick={e => e.stopPropagation()}>
         <div className={`rounded-t-3xl border-b p-5 ${isDelete ? "border-red-800 bg-red-950/30" : "border-amber-800 bg-amber-950/30"}`}>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.2 · Tratancia corregida</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400 font-black">v2.6.3 · Tratancia corregida</div>
           <h2 className={`mt-1 text-xl font-black ${isDelete ? "text-red-200" : "text-amber-200"}`}>
             {isDelete ? "Eliminar paciente creado por error" : "Archivar / egresar paciente"}
           </h2>
@@ -3497,7 +3511,7 @@ const AdvancedTeamPanel = ({ patient, authSession, onDataChanged }) => {
       <div className="rounded-3xl border border-slate-800 bg-[#131920] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.2 · Tratancia corregida</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-sky-400 font-black">v2.6.3 · Tratancia corregida</div>
             <h3 className="mt-1 text-base font-black text-white">Equipo y tratancia del caso</h3>
             <p className="mt-1 text-xs text-slate-500">Los miembros de la institución pueden ver el caso. Solo administradores y tratantes activos pueden modificarlo.</p>
           </div>
@@ -3647,11 +3661,11 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-4 backdrop-blur-md" onClick={onClose}>
-      <div className="h-[calc(100vh-2rem)] w-[min(1500px,calc(100vw-2rem))] max-w-none overflow-y-auto rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70 flex flex-col"
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-3 backdrop-blur-md" onClick={onClose}>
+      <div className="h-[calc(100vh-1.5rem)] w-[min(1680px,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-3xl border border-slate-700 bg-[#0d1117] shadow-2xl shadow-black/70 flex flex-col"
         onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className={`border-b ${rc.border} border-opacity-50 p-5 bg-[#131920]`}>
+        <div className={`shrink-0 border-b ${rc.border} border-opacity-50 p-4 bg-[#131920]`}>
           <div className="flex items-start justify-between mb-3">
             <div>
               <div className="text-[10px] text-slate-500 font-mono">RUT {patient.rut || patient.id}</div>
@@ -3715,70 +3729,78 @@ const PatientDetail = ({ patient, onClose, onEdit, onSafetyAction, authSession, 
           {quickTreatError && <div className="mt-2 rounded-xl border border-red-800 bg-red-950/30 p-2 text-xs text-red-200">{quickTreatError}</div>}
         </div>
         {/* Tabs */}
-        <div className="sticky top-0 z-20 border-b border-slate-800 flex overflow-x-auto bg-[#0d1117]/95 px-4 gap-1 backdrop-blur">
+        <div className="shrink-0 border-b border-slate-800 flex overflow-x-auto bg-[#0d1117]/95 px-4 gap-1 backdrop-blur">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors
+              className={`px-3 py-3 text-xs font-black whitespace-nowrap border-b-2 transition-colors
                 ${tab === t.id ? "border-sky-400 text-sky-400" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
               {t.label}
             </button>
           ))}
         </div>
         {/* Tab content */}
-        <div className="flex-1 p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
           {tab === "resumen" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  ["Riesgo suicida", patient.suicide_risk, "riesgo"],
-                  ["Riesgo heteroagresivo", patient.hetero_risk, "riesgo"],
-                  ["Riesgo social", patient.social_risk, "riesgo"],
-                  ["Email", patient.email || "Sin email", "info"],
-                  ["Fono", patient.phone || "Sin fono", "info"],
-                  ["Dirección", patient.address || "Sin dirección", "info"],
-                  ["Comuna", patient.comuna || "Sin comuna", "info"],
-                  ["Adherencia estimada", patient.adherence, "info"],
-                  ["Estado funcional", patient.functional, "info"],
-                  ["Red de apoyo", patient.support, "info"],
-                  ["Sector", patient.sector || "Sin sector", "info"],
-                  ["Consultorio", patient.consultorio || "Sin consultorio", "info"],
-                  ["Ingreso al programa", patient.admission, "date"],
-                ].map(([label, value, type]) => (
-                  <div key={label} className="bg-[#131920] rounded-lg p-3 border border-slate-800">
-                    <div className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider mb-1">{label}</div>
-                    <div className={`text-sm font-medium ${type === "riesgo" && value === "alto" ? "text-orange-400" : type === "riesgo" && value === "critico" ? "text-red-400" : type === "riesgo" && value === "medio" ? "text-yellow-400" : "text-slate-200"}`}>
-                      {value || "—"}
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.35fr_.65fr]">
+                <div className="space-y-3">
+                  {patNotes[0] && (
+                    <div className="rounded-3xl border border-sky-800/60 bg-sky-950/20 p-4 shadow-inner shadow-sky-950/30">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="text-[10px] text-sky-400 uppercase font-black tracking-wider">Último comentario clínico</div>
+                        <div className="font-mono text-[10px] text-slate-500">{patNotes[0].createdAt}</div>
+                      </div>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{patNotes[0].body}</p>
+                    </div>
+                  )}
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 uppercase font-black tracking-wider mb-2">Observaciones de gestión</div>
+                    <p className="text-sm text-slate-300 leading-relaxed">{patient.notes || "Sin observaciones."}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 xl:grid-cols-1">
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Último contacto</div>
+                    <div className="text-sky-400 text-xs font-mono">{patient.last_contact || "—"}</div>
+                  </div>
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Próximo control</div>
+                    <div className={`text-xs font-mono ${patient.next_control ? "text-emerald-400" : "text-red-400"}`}>
+                      {patient.next_control || "Sin agendar"}
                     </div>
                   </div>
-                ))}
-              </div>
-              {patNotes[0] && (
-                <div className="rounded-3xl border border-sky-800/60 bg-sky-950/20 p-4 shadow-inner shadow-sky-950/30">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="text-[10px] text-sky-400 uppercase font-black tracking-wider">Último comentario clínico</div>
-                    <div className="font-mono text-[10px] text-slate-500">{patNotes[0].createdAt}</div>
-                  </div>
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{patNotes[0].body}</p>
-                </div>
-              )}
-              <div className="bg-[#131920] rounded-lg p-3 border border-slate-800">
-                <div className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider mb-2">Observaciones de gestión</div>
-                <p className="text-sm text-slate-300 leading-relaxed">{patient.notes}</p>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Último contacto</div>
-                  <div className="text-sky-400 text-xs font-mono">{patient.last_contact}</div>
-                </div>
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Próximo control</div>
-                  <div className={`text-xs font-mono ${patient.next_control ? "text-emerald-400" : "text-red-400"}`}>
-                    {patient.next_control || "Sin agendar"}
+                  <div className="bg-[#131920] rounded-2xl p-3 border border-slate-800 text-center">
+                    <div className="text-slate-500 text-[10px] mb-1">Alertas activas</div>
+                    <div className={`text-xs font-bold ${patient.alerts > 0 ? "text-red-400" : "text-emerald-400"}`}>{patient.alerts}</div>
                   </div>
                 </div>
-                <div className="bg-[#131920] rounded-lg p-3 border border-slate-800 text-center">
-                  <div className="text-slate-500 text-[10px] mb-1">Alertas activas</div>
-                  <div className={`text-xs font-bold ${patient.alerts > 0 ? "text-red-400" : "text-emerald-400"}`}>{patient.alerts}</div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-800 bg-[#131920]/70 p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Datos rápidos del paciente</div>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+                  {[
+                    ["R. suicida", patient.suicide_risk, "riesgo"],
+                    ["R. hetero", patient.hetero_risk, "riesgo"],
+                    ["R. social", patient.social_risk, "riesgo"],
+                    ["Email", patient.email || "Sin email", "info"],
+                    ["Fono", patient.phone || "Sin fono", "info"],
+                    ["Dirección", patient.address || "Sin dirección", "info"],
+                    ["Comuna", patient.comuna || "Sin comuna", "info"],
+                    ["Adherencia", patient.adherence || "—", "info"],
+                    ["Funcional", patient.functional || "—", "info"],
+                    ["Red apoyo", patient.support || "—", "info"],
+                    ["Sector", patient.sector || "Sin sector", "info"],
+                    ["Consultorio", patient.consultorio || "Sin consultorio", "info"],
+                    ["Ingreso", patient.admission || "—", "date"],
+                  ].map(([label, value, type]) => (
+                    <div key={label} className="rounded-2xl border border-slate-800 bg-slate-950/25 px-3 py-2 min-h-[58px]">
+                      <div className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-500">{label}</div>
+                      <div className={`truncate text-xs font-black ${type === "riesgo" && value === "alto" ? "text-orange-400" : type === "riesgo" && value === "critico" ? "text-red-400" : type === "riesgo" && value === "medio" ? "text-yellow-400" : "text-slate-200"}`} title={String(value || "—")}>
+                        {value || "—"}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </>
@@ -6034,7 +6056,7 @@ function ClinCoordApp({ authSession, authProfile, onLogout, authLocked = false }
     try {
       const { authProfile: dbAuthProfile } = await loadWorkspaceDataFromSupabase(authSession);
       setRuntimeAuthProfile(dbAuthProfile);
-      // v2.6.2 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
+      // v2.6.3 bugfix: al refrescar datos después de editar paciente no pisar el tema local del usuario.
       // Antes, si profiles.theme_preference estaba en "claro", cada guardado devolvía la app al tema blanco.
       const storedTheme = getStoredThemeForUser(authSession?.user?.id);
       const preferredTheme = storedTheme || (dbAuthProfile?.themePreference && APP_THEMES[dbAuthProfile.themePreference] ? dbAuthProfile.themePreference : null);
